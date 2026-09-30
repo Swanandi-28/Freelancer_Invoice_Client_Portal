@@ -1,4 +1,7 @@
+import connectDB from "@/lib/mongodb";
 import Link from "next/link";
+
+await connectDB();
 
 export default function Home() {
   return (
@@ -11,9 +14,12 @@ export default function Home() {
         </h1>
 
         <div className="flex gap-4">
-          <button className="px-5 py-2 rounded-lg border border-slate-700 hover:bg-slate-800">
+          <Link
+            href="/login"
+            className="px-5 py-2 rounded-lg border border-slate-700 hover:bg-slate-800"
+          >
             Login
-          </button>
+          </Link>
 
           <Link
            href="/register" 

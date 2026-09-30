@@ -1,6 +1,11 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 
 export default function RegisterPage() {
+  const [role, setRole] = useState<"freelancer" | "client">("freelancer");
+
   return (
     <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-6 py-12">
 
@@ -29,7 +34,7 @@ export default function RegisterPage() {
           </p>
 
           {/* Role Selection */}
-          <div className="mb-6">
+          <div className="mb-7">
 
             <label className="block text-sm font-medium mb-3">
               I am a
@@ -37,11 +42,19 @@ export default function RegisterPage() {
 
             <div className="grid grid-cols-2 gap-4">
 
+              {/* Freelancer */}
               <button
                 type="button"
-                className="p-4 rounded-xl border border-blue-500 bg-blue-500/10 text-left"
+                onClick={() => setRole("freelancer")}
+                className={`p-4 rounded-xl border text-left transition ${
+                  role === "freelancer"
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-slate-700 hover:border-blue-500"
+                }`}
               >
-                <div className="text-2xl mb-2">💼</div>
+                <div className="text-2xl mb-2">
+                  💼
+                </div>
 
                 <div className="font-semibold">
                   Freelancer
@@ -52,11 +65,19 @@ export default function RegisterPage() {
                 </div>
               </button>
 
+              {/* Client */}
               <button
                 type="button"
-                className="p-4 rounded-xl border border-slate-700 hover:border-blue-500 text-left"
+                onClick={() => setRole("client")}
+                className={`p-4 rounded-xl border text-left transition ${
+                  role === "client"
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-slate-700 hover:border-blue-500"
+                }`}
               >
-                <div className="text-2xl mb-2">🏢</div>
+                <div className="text-2xl mb-2">
+                  🏢
+                </div>
 
                 <div className="font-semibold">
                   Client
@@ -71,8 +92,18 @@ export default function RegisterPage() {
 
           </div>
 
-          {/* Name */}
+          {/* Selected Role */}
+          <div className="mb-6 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-sm text-blue-400">
+            Creating a{" "}
+            <span className="font-semibold">
+              {role === "freelancer" ? "Freelancer" : "Client"}
+            </span>{" "}
+            account
+          </div>
+
+          {/* Full Name */}
           <div className="mb-5">
+
             <label className="block text-sm font-medium mb-2">
               Full Name
             </label>
@@ -82,10 +113,12 @@ export default function RegisterPage() {
               placeholder="Enter your full name"
               className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
             />
+
           </div>
 
           {/* Email */}
           <div className="mb-5">
+
             <label className="block text-sm font-medium mb-2">
               Email Address
             </label>
@@ -95,10 +128,12 @@ export default function RegisterPage() {
               placeholder="you@example.com"
               className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
             />
+
           </div>
 
           {/* Password */}
           <div className="mb-5">
+
             <label className="block text-sm font-medium mb-2">
               Password
             </label>
@@ -108,10 +143,12 @@ export default function RegisterPage() {
               placeholder="Create a password"
               className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
             />
+
           </div>
 
           {/* Confirm Password */}
           <div className="mb-6">
+
             <label className="block text-sm font-medium mb-2">
               Confirm Password
             </label>
@@ -121,37 +158,42 @@ export default function RegisterPage() {
               placeholder="Confirm your password"
               className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
             />
+
           </div>
 
-          {/* Register */}
-          <Link
-            href="/register"
-            className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium"
+          {/* Create Account */}
+          <button
+            type="button"
+            className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium transition"
           >
-            Create Account
-          </Link>
+            Create {role === "freelancer" ? "Freelancer" : "Client"} Account
+          </button>
 
           {/* Login */}
           <p className="text-center text-slate-400 text-sm mt-6">
             Already have an account?{" "}
+
             <Link
               href="/login"
               className="text-blue-400 hover:text-blue-300"
             >
               Login
             </Link>
+
           </p>
 
         </div>
 
         {/* Back */}
         <div className="text-center mt-6">
+
           <Link
             href="/"
             className="text-slate-500 hover:text-slate-300 text-sm"
           >
             ← Back to home
           </Link>
+
         </div>
 
       </div>
