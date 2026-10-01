@@ -1,42 +1,99 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
+  const router = useRouter();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.message || "Login failed.");
+        return;
+      }
+
+      // Temporary client-side session
+      localStorage.setItem("user", JSON.stringify(data.user));
+
+      // Redirect based on role
+      if (data.user.role === "freelancer") {
+        router.push("/freelancer/dashboard");
+      } else {
+        router.push("/client/dashboard");
+      }
+    } catch (error) {
+      console.error(error);
+      setError("Unable to connect to the server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-6">
       <div className="w-full max-w-md">
 
-        {/* Logo */}
         <div className="text-center mb-8">
-          <Link href="/" className="text-3xl font-bold">
-            Freelancer<span className="text-blue-500">Portal</span>
+          <Link
+            href="/"
+            className="text-2xl font-bold text-blue-400"
+          >
+            FreelancerPortal
           </Link>
 
-          <p className="text-slate-400 mt-3">
-            Sign in to your account
+          <h1 className="text-3xl font-bold mt-6">
+            Welcome Back
+          </h1>
+
+          <p className="text-slate-400 mt-2">
+            Login to your account
           </p>
         </div>
 
-        {/* Login Card */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8">
-
-          <h1 className="text-2xl font-bold mb-2">
-            Welcome back
-          </h1>
-
-          <p className="text-slate-400 mb-8">
-            Enter your details to continue.
-          </p>
+        <form
+          onSubmit={handleLogin}
+          className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl"
+        >
 
           {/* Email */}
           <div className="mb-5">
             <label className="block text-sm font-medium mb-2">
-              Email Address
+              Email
             </label>
 
             <input
               type="email"
-              placeholder="you@example.com"
-              className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Enter your email"
+              required
+              className="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 focus:border-blue-500 focus:outline-none"
             />
           </div>
 
@@ -48,38 +105,47 @@ export default function LoginPage() {
 
             <input
               type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
-              className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
+              required
+              className="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 focus:border-blue-500 focus:outline-none"
             />
           </div>
 
-          {/* Login Button */}
+          {/* Error */}
+          {error && (
+            <div className="mb-5 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          {/* Login */}
           <button
-            type="button"
-            className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium transition"
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:cursor-not-allowed font-semibold transition"
           >
-            Login
+            {loading ? "Logging in..." : "Login"}
           </button>
 
-          {/* Register */}
-          <p className="text-center text-slate-400 text-sm mt-6">
-            Don&apos;t have an account?{" "}
+          <p className="text-center text-sm text-slate-400 mt-6">
+            Don't have an account?{" "}
             <Link
               href="/register"
               className="text-blue-400 hover:text-blue-300"
             >
-              Create one
+              Create Account
             </Link>
           </p>
-        </div>
+        </form>
 
-        {/* Back */}
         <div className="text-center mt-6">
           <Link
             href="/"
-            className="text-slate-500 hover:text-slate-300 text-sm"
+            className="text-sm text-slate-500 hover:text-slate-300"
           >
-            ← Back to home
+            ← Back to Home
           </Link>
         </div>
 

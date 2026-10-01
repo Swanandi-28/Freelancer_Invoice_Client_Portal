@@ -4,28 +4,39 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 interface Client {
-  _id?: string;
+  _id: string;
   name: string;
   company: string;
   email: string;
-  projects: number;
-  revenue: number;
-  status: string;
 }
 
-export default function ClientsPage() {
+interface Project {
+  _id: string;
+  name: string;
+  description: string;
+  budget: number;
+  deadline: string;
+  status: string;
+  client: Client;
+}
+
+export default function ProjectsPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+
   const [showForm, setShowForm] = useState(false);
 
   const [name, setName] = useState("");
-  const [company, setCompany] = useState("");
-  const [email, setEmail] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [description, setDescription] = useState("");
+  const [budget, setBudget] = useState("");
+  const [deadline, setDeadline] = useState("");
 
-  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  // Get logged-in freelancer
+  const [search, setSearch] = useState("");
+
   const getUser = () => {
     if (typeof window === "undefined") return null;
 
@@ -40,44 +51,38 @@ export default function ClientsPage() {
     }
   };
 
-  // Load clients from MongoDB
-  const loadClients = async () => {
+  const loadData = async () => {
     const user = getUser();
 
-    if (!user?.id) {
-      return;
-    }
+    if (!user?.id) return;
 
     try {
-      const response = await fetch(
-        `/api/clients?freelancerId=${user.id}`
-      );
+      const [clientsResponse, projectsResponse] =
+        await Promise.all([
+          fetch(`/api/clients?freelancerId=${user.id}`),
+          fetch(`/api/projects?freelancerId=${user.id}`),
+        ]);
 
-      const data = await response.json();
+      const clientsData = await clientsResponse.json();
+      const projectsData = await projectsResponse.json();
 
-      if (data.success) {
-        const formattedClients = data.clients.map(
-          (client: Client) => ({
-            ...client,
-            projects: 0,
-            revenue: 0,
-            status: "Active",
-          })
-        );
+      if (clientsData.success) {
+        setClients(clientsData.clients);
+      }
 
-        setClients(formattedClients);
+      if (projectsData.success) {
+        setProjects(projectsData.projects);
       }
     } catch (error) {
-      console.error("Failed to load clients:", error);
+      console.error("Failed to load data:", error);
     }
   };
 
   useEffect(() => {
-    loadClients();
+    loadData();
   }, []);
 
-  // Add client
-  const handleAddClient = async (
+  const handleCreateProject = async (
     e: React.FormEvent
   ) => {
     e.preventDefault();
@@ -94,34 +99,39 @@ export default function ClientsPage() {
     try {
       setLoading(true);
 
-      const response = await fetch("/api/clients", {
+      const response = await fetch("/api/projects", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           freelancerId: user.id,
+          clientId,
           name,
-          company,
-          email,
+          description,
+          budget,
+          deadline,
+          status: "In Progress",
         }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        setMessage(data.message || "Failed to add client.");
+        setMessage(data.message || "Failed to create project.");
         return;
       }
 
-      setMessage("Client added successfully.");
+      setMessage("Project created successfully.");
 
       setName("");
-      setCompany("");
-      setEmail("");
+      setClientId("");
+      setDescription("");
+      setBudget("");
+      setDeadline("");
       setShowForm(false);
 
-      await loadClients();
+      await loadData();
     } catch (error) {
       console.error(error);
       setMessage("Unable to connect to the server.");
@@ -130,14 +140,13 @@ export default function ClientsPage() {
     }
   };
 
-  // Search
-  const filteredClients = clients.filter((client) => {
-    const searchText = search.toLowerCase();
+  const filteredProjects = projects.filter((project) => {
+    const text = search.toLowerCase();
 
     return (
-      client.name.toLowerCase().includes(searchText) ||
-      client.company.toLowerCase().includes(searchText) ||
-      client.email.toLowerCase().includes(searchText)
+      project.name.toLowerCase().includes(text) ||
+      project.client?.name?.toLowerCase().includes(text) ||
+      project.client?.company?.toLowerCase().includes(text)
     );
   });
 
@@ -147,6 +156,7 @@ export default function ClientsPage() {
       {/* Navbar */}
       <nav className="border-b border-slate-800 bg-slate-900">
         <div className="flex items-center justify-between px-6 py-4">
+
           <Link
             href="/freelancer/dashboard"
             className="text-xl font-bold text-blue-400"
@@ -160,6 +170,7 @@ export default function ClientsPage() {
           >
             Dashboard
           </Link>
+
         </div>
       </nav>
 
@@ -179,14 +190,14 @@ export default function ClientsPage() {
 
             <Link
               href="/freelancer/clients"
-              className="block px-4 py-3 rounded-lg bg-blue-600"
+              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
             >
               Clients
             </Link>
 
             <Link
               href="/freelancer/projects"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
+              className="block px-4 py-3 rounded-lg bg-blue-600"
             >
               Projects
             </Link>
@@ -237,11 +248,11 @@ export default function ClientsPage() {
 
             <div>
               <h1 className="text-3xl font-bold">
-                Clients
+                Projects
               </h1>
 
               <p className="text-slate-400 mt-1">
-                Manage your clients and their projects
+                Manage your projects and deadlines
               </p>
             </div>
 
@@ -249,7 +260,7 @@ export default function ClientsPage() {
               onClick={() => setShowForm(!showForm)}
               className="px-5 py-3 rounded-lg bg-blue-600 hover:bg-blue-500 font-semibold"
             >
-              + Add Client
+              + New Project
             </button>
 
           </div>
@@ -261,47 +272,73 @@ export default function ClientsPage() {
             </div>
           )}
 
-          {/* Add Client Form */}
+          {/* Form */}
           {showForm && (
             <form
-              onSubmit={handleAddClient}
+              onSubmit={handleCreateProject}
               className="mb-8 bg-slate-900 border border-slate-800 rounded-xl p-6"
             >
 
               <h2 className="text-xl font-semibold mb-5">
-                Add New Client
+                Create New Project
               </h2>
 
-              <div className="grid md:grid-cols-3 gap-4">
+              <div className="grid md:grid-cols-2 gap-4">
 
                 <input
                   type="text"
-                  placeholder="Client Name"
+                  placeholder="Project Name"
                   value={name}
-                  onChange={(e) =>
-                    setName(e.target.value)
-                  }
+                  onChange={(e) => setName(e.target.value)}
                   required
                   className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
                 />
 
-                <input
-                  type="text"
-                  placeholder="Company"
-                  value={company}
+                <select
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  required
+                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                >
+                  <option value="">Select Client</option>
+
+                  {clients.map((client) => (
+                    <option
+                      key={client._id}
+                      value={client._id}
+                    >
+                      {client.name} - {client.company}
+                    </option>
+                  ))}
+                </select>
+
+                <textarea
+                  placeholder="Project Description"
+                  value={description}
                   onChange={(e) =>
-                    setCompany(e.target.value)
+                    setDescription(e.target.value)
+                  }
+                  className="md:col-span-2 px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  rows={3}
+                />
+
+                <input
+                  type="number"
+                  placeholder="Budget"
+                  value={budget}
+                  onChange={(e) =>
+                    setBudget(e.target.value)
                   }
                   required
+                  min="0"
                   className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
                 />
 
                 <input
-                  type="email"
-                  placeholder="Email"
-                  value={email}
+                  type="date"
+                  value={deadline}
                   onChange={(e) =>
-                    setEmail(e.target.value)
+                    setDeadline(e.target.value)
                   }
                   required
                   className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
@@ -316,7 +353,9 @@ export default function ClientsPage() {
                   disabled={loading}
                   className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 font-semibold"
                 >
-                  {loading ? "Saving..." : "Save Client"}
+                  {loading
+                    ? "Creating..."
+                    : "Create Project"}
                 </button>
 
                 <button
@@ -337,7 +376,7 @@ export default function ClientsPage() {
 
             <input
               type="text"
-              placeholder="Search clients..."
+              placeholder="Search projects..."
               value={search}
               onChange={(e) =>
                 setSearch(e.target.value)
@@ -347,104 +386,80 @@ export default function ClientsPage() {
 
           </div>
 
-          {/* Clients */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          {/* Project Cards */}
+          {filteredProjects.length === 0 ? (
 
-            <div className="overflow-x-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center text-slate-400">
+              No projects found. Create your first project.
+            </div>
 
-              <table className="w-full">
+          ) : (
 
-                <thead className="bg-slate-800">
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
 
-                  <tr>
-                    <th className="text-left px-6 py-4">
-                      Client
-                    </th>
+              {filteredProjects.map((project) => (
 
-                    <th className="text-left px-6 py-4">
-                      Company
-                    </th>
+                <div
+                  key={project._id}
+                  className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:border-slate-700 transition"
+                >
 
-                    <th className="text-left px-6 py-4">
-                      Email
-                    </th>
+                  <div className="flex items-start justify-between gap-4">
 
-                    <th className="text-left px-6 py-4">
-                      Projects
-                    </th>
+                    <div>
+                      <h2 className="text-lg font-semibold">
+                        {project.name}
+                      </h2>
 
-                    <th className="text-left px-6 py-4">
-                      Revenue
-                    </th>
+                      <p className="text-sm text-slate-400 mt-1">
+                        {project.client?.company}
+                      </p>
+                    </div>
 
-                    <th className="text-left px-6 py-4">
-                      Status
-                    </th>
-                  </tr>
+                    <span className="px-3 py-1 rounded-full text-xs bg-blue-500/10 text-blue-400 whitespace-nowrap">
+                      {project.status}
+                    </span>
 
-                </thead>
+                  </div>
 
-                <tbody>
+                  <p className="text-sm text-slate-400 mt-5 min-h-10">
+                    {project.description ||
+                      "No description provided."}
+                  </p>
 
-                  {filteredClients.length === 0 ? (
+                  <div className="mt-6 space-y-3">
 
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="text-center px-6 py-12 text-slate-400"
-                      >
-                        No clients found.
-                      </td>
-                    </tr>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">
+                        Budget
+                      </span>
 
-                  ) : (
+                      <span className="font-semibold">
+                        ₹{project.budget.toLocaleString()}
+                      </span>
+                    </div>
 
-                    filteredClients.map((client) => (
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">
+                        Deadline
+                      </span>
 
-                      <tr
-                        key={client._id}
-                        className="border-t border-slate-800 hover:bg-slate-800/50"
-                      >
+                      <span>
+                        {new Date(
+                          project.deadline
+                        ).toLocaleDateString("en-IN")}
+                      </span>
+                    </div>
 
-                        <td className="px-6 py-4 font-medium">
-                          {client.name}
-                        </td>
+                  </div>
 
-                        <td className="px-6 py-4 text-slate-300">
-                          {client.company}
-                        </td>
+                </div>
 
-                        <td className="px-6 py-4 text-slate-400">
-                          {client.email}
-                        </td>
-
-                        <td className="px-6 py-4">
-                          {client.projects}
-                        </td>
-
-                        <td className="px-6 py-4">
-                          ₹{client.revenue.toLocaleString()}
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <span className="px-3 py-1 rounded-full text-xs bg-green-500/10 text-green-400">
-                            {client.status}
-                          </span>
-                        </td>
-
-                      </tr>
-
-                    ))
-
-                  )}
-
-                </tbody>
-
-              </table>
+              ))}
 
             </div>
 
-          </div>
+          )}
 
         </section>
 
