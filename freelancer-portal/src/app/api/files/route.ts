@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
+import { mkdir, writeFile } from "fs/promises";
+import path from "path";
+import { randomUUID } from "crypto";
+
 import connectDB from "@/lib/mongodb";
-import Invoice from "@/models/Invoice";
+import FileModel from "@/models/File";
 import Client from "@/models/Client";
 import Project from "@/models/Project";
 import { getAuthenticatedUser } from "@/lib/auth";
 
+export const runtime = "nodejs";
+
 // =====================================================
-// GET ALL INVOICES
+// GET FILES
 // =====================================================
 
 export async function GET() {
@@ -27,7 +33,7 @@ export async function GET() {
       return NextResponse.json(
         {
           success: false,
-          message: "Only freelancers can access invoices.",
+          message: "Only freelancers can access files.",
         },
         { status: 403 }
       );
@@ -35,7 +41,7 @@ export async function GET() {
 
     await connectDB();
 
-    const invoices = await Invoice.find({
+    const files = await FileModel.find({
       freelancer: user.id,
     })
       .populate("client", "name company email")
@@ -45,15 +51,15 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      invoices,
+      files,
     });
   } catch (error) {
-    console.error("Get invoices error:", error);
+    console.error("Get files error:", error);
 
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to load invoices.",
+        message: "Failed to load files.",
       },
       { status: 500 }
     );
@@ -61,7 +67,7 @@ export async function GET() {
 }
 
 // =====================================================
-// CREATE INVOICE
+// UPLOAD FILE
 // =====================================================
 
 export async function POST(request: Request) {
@@ -86,68 +92,64 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          message: "Only freelancers can create invoices.",
+          message: "Only freelancers can upload files.",
         },
         { status: 403 }
       );
     }
 
-    // -------------------------------------------------
-    // DATABASE
-    // -------------------------------------------------
-
     await connectDB();
 
     // -------------------------------------------------
-    // REQUEST DATA
+    // FORM DATA
     // -------------------------------------------------
 
-    const body = await request.json();
+    const formData = await request.formData();
 
-    const {
-      clientId,
-      projectId,
-      amount,
-      issueDate,
-      dueDate,
-      status,
-    } = body;
+    const uploadedFile = formData.get("file");
+    const clientId = formData.get("clientId")?.toString();
+    const projectId = formData.get("projectId")?.toString();
 
     // -------------------------------------------------
-    // VALIDATION
+    // VALIDATE FILE
     // -------------------------------------------------
 
     if (
-      !clientId ||
-      !projectId ||
-      amount === undefined ||
-      !issueDate ||
-      !dueDate
+      !uploadedFile ||
+      !(uploadedFile instanceof globalThis.File)
     ) {
       return NextResponse.json(
         {
           success: false,
-          message: "All required fields must be provided.",
+          message: "Please select a valid file.",
         },
         { status: 400 }
       );
     }
 
-    if (Number(amount) <= 0) {
+    if (!clientId || !projectId) {
       return NextResponse.json(
         {
           success: false,
-          message: "Invoice amount must be greater than zero.",
+          message: "Client and project are required.",
         },
         { status: 400 }
       );
     }
 
-    if (new Date(dueDate) < new Date(issueDate)) {
+    // -------------------------------------------------
+    // FILE SIZE LIMIT
+    // -------------------------------------------------
+    // 10 MB maximum for this local project.
+    // -------------------------------------------------
+
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+    if (uploadedFile.size > MAX_FILE_SIZE) {
       return NextResponse.json(
         {
           success: false,
-          message: "Due date cannot be before issue date.",
+          message: "File size cannot exceed 10 MB.",
         },
         { status: 400 }
       );
@@ -166,7 +168,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid client or client does not belong to you.",
+          message: "Invalid client.",
         },
         { status: 403 }
       );
@@ -178,125 +180,124 @@ export async function POST(request: Request) {
 
     const project = await Project.findOne({
       _id: projectId,
-      freelancer: user.id,
       client: clientId,
+      freelancer: user.id,
     });
 
     if (!project) {
       return NextResponse.json(
         {
           success: false,
-          message:
-            "Invalid project or project does not belong to this client.",
+          message: "Invalid project.",
         },
         { status: 403 }
       );
     }
 
     // -------------------------------------------------
-    // GENERATE UNIQUE INVOICE NUMBER
-    // -------------------------------------------------
-    //
-    // Invoice numbers are globally unique.
-    //
-    // Example:
-    //
-    // INV-001
-    // INV-002
-    // INV-003
-    //
-    // We check ALL invoices, not just this freelancer's
-    // invoices.
+    // CREATE UPLOAD DIRECTORY
     // -------------------------------------------------
 
-    const latestInvoice = await Invoice.findOne({
-      invoiceNumber: /^INV-\d+$/,
-    })
-      .sort({ invoiceNumber: -1 })
-      .select("invoiceNumber")
-      .lean();
+    const uploadDirectory = path.join(
+      process.cwd(),
+      "public",
+      "uploads"
+    );
 
-    let nextNumber = 1;
-
-    if (latestInvoice?.invoiceNumber) {
-      const match = latestInvoice.invoiceNumber.match(/\d+$/);
-
-      if (match) {
-        nextNumber = parseInt(match[0], 10) + 1;
-      }
-    }
-
-    let invoiceNumber = `INV-${String(nextNumber).padStart(3, "0")}`;
-
-    // -------------------------------------------------
-    // EXTRA SAFETY CHECK
-    // -------------------------------------------------
-    //
-    // If the generated number somehow already exists,
-    // keep increasing until we find a free number.
-    // -------------------------------------------------
-
-    while (
-      await Invoice.exists({
-        invoiceNumber,
-      })
-    ) {
-      nextNumber++;
-
-      invoiceNumber = `INV-${String(nextNumber).padStart(3, "0")}`;
-    }
-
-    // -------------------------------------------------
-    // CREATE INVOICE
-    // -------------------------------------------------
-
-    const invoice = await Invoice.create({
-      freelancer: user.id,
-      client: clientId,
-      project: projectId,
-      invoiceNumber,
-      amount: Number(amount),
-      issueDate: new Date(issueDate),
-      dueDate: new Date(dueDate),
-      status: status || "Pending",
+    await mkdir(uploadDirectory, {
+      recursive: true,
     });
 
     // -------------------------------------------------
-    // RETURN CREATED INVOICE
+    // GENERATE SAFE UNIQUE FILE NAME
     // -------------------------------------------------
 
-    const populatedInvoice = await Invoice.findById(invoice._id)
-      .populate("client", "name company email")
-      .populate("project", "name")
-      .lean();
+    const originalName = uploadedFile.name;
+
+    const extension = path.extname(originalName);
+
+    const safeFileName =
+      `${randomUUID()}${extension}`;
+
+    const filePath = path.join(
+      uploadDirectory,
+      safeFileName
+    );
+
+    // -------------------------------------------------
+    // READ FILE
+    // -------------------------------------------------
+
+    const arrayBuffer =
+      await uploadedFile.arrayBuffer();
+
+    const buffer = Buffer.from(arrayBuffer);
+
+    // -------------------------------------------------
+    // SAVE PHYSICAL FILE
+    // -------------------------------------------------
+
+    await writeFile(filePath, buffer);
+
+    // -------------------------------------------------
+    // PUBLIC URL
+    // -------------------------------------------------
+
+    const fileUrl =
+      `/uploads/${safeFileName}`;
+
+    // -------------------------------------------------
+    // SAVE FILE INFORMATION TO MONGODB
+    // -------------------------------------------------
+
+    const savedFile = await FileModel.create({
+      freelancer: user.id,
+      client: clientId,
+      project: projectId,
+
+      fileName: safeFileName,
+      originalName,
+
+      fileUrl,
+
+      fileSize: uploadedFile.size,
+
+      fileType:
+        uploadedFile.type ||
+        "application/octet-stream",
+    });
+
+    // -------------------------------------------------
+    // RETURN CREATED FILE
+    // -------------------------------------------------
+
+    const populatedFile =
+      await FileModel.findById(savedFile._id)
+        .populate(
+          "client",
+          "name company email"
+        )
+        .populate(
+          "project",
+          "name"
+        )
+        .lean();
 
     return NextResponse.json(
       {
         success: true,
-        message: "Invoice created successfully.",
-        invoice: populatedInvoice,
+        message: "File uploaded successfully.",
+        file: populatedFile,
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Create invoice error:", error);
-
-    // MongoDB duplicate-key error
-    if (error?.code === 11000) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Invoice number conflict. Please try creating the invoice again.",
-        },
-        { status: 409 }
-      );
-    }
+  } catch (error) {
+    console.error("Upload file error:", error);
 
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to create invoice.",
+        message: "Failed to upload file.",
       },
       { status: 500 }
     );

@@ -1,13 +1,73 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Project from "@/models/Project";
+import Client from "@/models/Client";
+import { getAuthenticatedUser } from "@/lib/auth";
+
+export async function GET() {
+  try {
+    const user = await getAuthenticatedUser();
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, message: "Unauthorized." },
+        { status: 401 }
+      );
+    }
+
+    await connectDB();
+
+    const linkedClients = user.role === "client"
+      ? await Client.find({ email: user.email }).select("_id")
+      : [];
+    const clientIds = linkedClients.map((client) => client._id);
+    const filter = user.role === "freelancer"
+      ? { freelancer: user.id }
+      : { client: { $in: clientIds } };
+
+    const projects = await Project.find(filter)
+      .populate("client", "name company email")
+      .populate("freelancer", "name email")
+      .sort({ createdAt: -1 });
+
+    return NextResponse.json({
+      success: true,
+      projects,
+    });
+  } catch (error) {
+    console.error("Get projects error:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Failed to fetch projects.",
+      },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: Request) {
   try {
+    const user = await getAuthenticatedUser();
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, message: "Unauthorized." },
+        { status: 401 }
+      );
+    }
+
+    if (user.role !== "freelancer") {
+      return NextResponse.json(
+        { success: false, message: "Only freelancers can create projects." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
 
     const {
-      freelancerId,
       clientId,
       name,
       description,
@@ -16,17 +76,11 @@ export async function POST(request: Request) {
       status,
     } = body;
 
-    if (
-      !freelancerId ||
-      !clientId ||
-      !name ||
-      budget === undefined ||
-      !deadline
-    ) {
+    if (!clientId || !name || budget === undefined || !deadline) {
       return NextResponse.json(
         {
           success: false,
-          message: "Required fields are missing.",
+          message: "Client, name, budget and deadline are required.",
         },
         { status: 400 }
       );
@@ -34,13 +88,29 @@ export async function POST(request: Request) {
 
     await connectDB();
 
+    // Make sure the selected client actually belongs to this freelancer
+    const client = await Client.findOne({
+      _id: clientId,
+      freelancer: user.id,
+    });
+
+    if (!client) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid client.",
+        },
+        { status: 403 }
+      );
+    }
+
     const project = await Project.create({
-      freelancer: freelancerId,
+      freelancer: user.id,
       client: clientId,
       name: name.trim(),
-      description: description?.trim() || "",
+      description: description || "",
       budget: Number(budget),
-      deadline: new Date(deadline),
+      deadline,
       status: status || "Pending",
     });
 
@@ -59,47 +129,6 @@ export async function POST(request: Request) {
       {
         success: false,
         message: "Failed to create project.",
-      },
-      { status: 500 }
-    );
-  }
-}
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-
-    const freelancerId = searchParams.get("freelancerId");
-
-    if (!freelancerId) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Freelancer ID is required.",
-        },
-        { status: 400 }
-      );
-    }
-
-    await connectDB();
-
-    const projects = await Project.find({
-      freelancer: freelancerId,
-    })
-      .populate("client", "name company email")
-      .sort({ createdAt: -1 });
-
-    return NextResponse.json({
-      success: true,
-      projects,
-    });
-  } catch (error) {
-    console.error("Get projects error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to fetch projects.",
       },
       { status: 500 }
     );

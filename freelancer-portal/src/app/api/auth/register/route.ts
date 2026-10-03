@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
+import Client from "@/models/Client";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    const { name, email, password, role } = body;
+    const name = body.name?.trim();
+    const email = body.email?.toLowerCase().trim();
+    const password = body.password;
+    const role = body.role;
 
-    // Validate required fields
     if (!name || !email || !password || !role) {
       return NextResponse.json(
         {
@@ -20,18 +24,16 @@ export async function POST(request: Request) {
       );
     }
 
-    // Validate role
     if (role !== "freelancer" && role !== "client") {
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid role selected.",
+          message: "Invalid role.",
         },
         { status: 400 }
       );
     }
 
-    // Basic password validation
     if (password.length < 6) {
       return NextResponse.json(
         {
@@ -42,15 +44,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Connect to MongoDB
     await connectDB();
 
-    // Normalize email
-    const normalizedEmail = email.toLowerCase().trim();
-
-    // Check if user already exists
+    // Check whether the email is already registered.
     const existingUser = await User.findOne({
-      email: normalizedEmail,
+      email,
     });
 
     if (existingUser) {
@@ -63,27 +61,50 @@ export async function POST(request: Request) {
       );
     }
 
-    // Hash password
+    // Hash password before saving.
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
-    const user = await User.create({
-      name: name.trim(),
-      email: normalizedEmail,
+    // Create the user account.
+    const newUser = await User.create({
+      name,
+      email,
       password: hashedPassword,
       role,
     });
+
+    /*
+      CLIENT ACCOUNT CONNECTION
+
+      If a freelancer already added this email
+      as a client, connect that Client record
+      to the newly created client User account.
+    */
+    if (role === "client") {
+      await Client.updateMany(
+        {
+          email,
+          user: { $exists: false },
+        },
+        {
+          $set: {
+            user: newUser._id,
+          },
+        }
+      );
+    }
+
+    const safeUser = {
+      id: newUser._id.toString(),
+      name: newUser.name,
+      email: newUser.email,
+      role: newUser.role,
+    };
 
     return NextResponse.json(
       {
         success: true,
         message: "Account created successfully.",
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+        user: safeUser,
       },
       { status: 201 }
     );
@@ -93,7 +114,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        message: "Something went wrong while creating the account.",
+        message: "Something went wrong during registration.",
       },
       { status: 500 }
     );

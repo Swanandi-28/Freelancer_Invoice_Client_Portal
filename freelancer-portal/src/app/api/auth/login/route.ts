@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
+import { createToken } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
@@ -52,16 +53,32 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({
+    const authUser = {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    };
+
+    const token = await createToken(authUser);
+
+    const response = NextResponse.json({
       success: true,
       message: "Login successful.",
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: authUser,
     });
+
+    response.cookies.set({
+      name: "auth_token",
+      value: token,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
+    });
+
+    return response;
   } catch (error) {
     console.error("Login error:", error);
 

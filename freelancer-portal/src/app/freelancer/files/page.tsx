@@ -1,494 +1,913 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-type FileItem = {
-  id: number;
+type Client = {
+  _id: string;
   name: string;
-  client: string;
-  project: string;
-  size: string;
-  type: string;
-  uploadedDate: string;
+  company: string;
+  email: string;
 };
 
-export default function FilesPage() {
+type Project = {
+  _id: string;
+  name: string;
+  client:
+    | string
+    | {
+        _id: string;
+        name: string;
+        company: string;
+      };
+};
+
+type UploadedFile = {
+  _id: string;
+  fileName: string;
+  originalName: string;
+  fileUrl: string;
+  fileSize: number;
+  fileType: string;
+  createdAt: string;
+
+  client:
+    | string
+    | {
+        _id: string;
+        name: string;
+        company: string;
+      };
+
+  project:
+    | string
+    | {
+        _id: string;
+        name: string;
+      };
+};
+
+export default function FreelancerFilesPage() {
+  const router = useRouter();
+
+  const [clients, setClients] = useState<Client[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+
+  const [selectedClient, setSelectedClient] = useState("");
+  const [selectedProject, setSelectedProject] = useState("");
+
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  const [search, setSearch] = useState("");
+
   const [showForm, setShowForm] = useState(false);
 
-  const [files, setFiles] = useState<FileItem[]>([
-    {
-      id: 1,
-      name: "homepage-design.fig",
-      client: "ABC Company",
-      project: "E-commerce Website",
-      size: "4.8 MB",
-      type: "Design",
-      uploadedDate: "20 Sep 2026",
-    },
-    {
-      id: 2,
-      name: "project-requirements.pdf",
-      client: "ABC Company",
-      project: "E-commerce Website",
-      size: "1.2 MB",
-      type: "PDF",
-      uploadedDate: "18 Sep 2026",
-    },
-    {
-      id: 3,
-      name: "brand-logo.zip",
-      client: "XYZ Solutions",
-      project: "Brand Identity Design",
-      size: "8.5 MB",
-      type: "Archive",
-      uploadedDate: "15 Sep 2026",
-    },
-    {
-      id: 4,
-      name: "mobile-wireframes.pdf",
-      client: "Tech Startup",
-      project: "Mobile App UI",
-      size: "2.4 MB",
-      type: "PDF",
-      uploadedDate: "12 Sep 2026",
-    },
-  ]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
 
-  const [newFile, setNewFile] = useState({
-    name: "",
-    client: "",
-    project: "",
-    size: "",
-    type: "PDF",
-  });
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  function handleAddFile(e: React.FormEvent) {
-    e.preventDefault();
+  // =====================================================
+  // LOAD DATA
+  // =====================================================
 
-    if (
-      !newFile.name ||
-      !newFile.client ||
-      !newFile.project ||
-      !newFile.size
-    ) {
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const [clientsResponse, projectsResponse, filesResponse] =
+        await Promise.all([
+          fetch("/api/clients", {
+            cache: "no-store",
+          }),
+
+          fetch("/api/projects", {
+            cache: "no-store",
+          }),
+
+          fetch("/api/files", {
+            cache: "no-store",
+          }),
+        ]);
+
+      const clientsData = await clientsResponse.json();
+      const projectsData = await projectsResponse.json();
+      const filesData = await filesResponse.json();
+
+      if (
+        clientsResponse.status === 401 ||
+        projectsResponse.status === 401 ||
+        filesResponse.status === 401
+      ) {
+        router.push("/login");
+        return;
+      }
+
+      if (!clientsResponse.ok) {
+        throw new Error(
+          clientsData.message || "Failed to load clients."
+        );
+      }
+
+      if (!projectsResponse.ok) {
+        throw new Error(
+          projectsData.message || "Failed to load projects."
+        );
+      }
+
+      if (!filesResponse.ok) {
+        throw new Error(
+          filesData.message || "Failed to load files."
+        );
+      }
+
+      setClients(clientsData.clients || []);
+      setProjects(projectsData.projects || []);
+      setFiles(filesData.files || []);
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load files."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =====================================================
+  // PROJECTS FOR SELECTED CLIENT
+  // =====================================================
+
+  const availableProjects = useMemo(() => {
+    if (!selectedClient) {
+      return projects;
+    }
+
+    return projects.filter((project) => {
+      const clientId =
+        typeof project.client === "string"
+          ? project.client
+          : project.client?._id;
+
+      return clientId === selectedClient;
+    });
+  }, [projects, selectedClient]);
+
+  // =====================================================
+  // CLIENT CHANGE
+  // =====================================================
+
+  const handleClientChange = (
+    event: React.ChangeEvent<HTMLSelectElement>
+  ) => {
+    setSelectedClient(event.target.value);
+    setSelectedProject("");
+  };
+
+  // =====================================================
+  // FILE SELECT
+  // =====================================================
+
+  const handleFileChange = (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0] || null;
+
+    setSelectedFile(file);
+    setError("");
+  };
+
+  // =====================================================
+  // UPLOAD
+  // =====================================================
+
+  const handleUpload = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
+
+    setError("");
+    setSuccess("");
+
+    if (!selectedClient) {
+      setError("Please select a client.");
       return;
     }
 
-    const file: FileItem = {
-      id: Date.now(),
-      name: newFile.name,
-      client: newFile.client,
-      project: newFile.project,
-      size: `${newFile.size} MB`,
-      type: newFile.type,
-      uploadedDate: new Date().toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }),
-    };
+    if (!selectedProject) {
+      setError("Please select a project.");
+      return;
+    }
 
-    setFiles([...files, file]);
+    if (!selectedFile) {
+      setError("Please select a file.");
+      return;
+    }
 
-    setNewFile({
-      name: "",
-      client: "",
-      project: "",
-      size: "",
-      type: "PDF",
+    try {
+      setUploading(true);
+
+      const formData = new FormData();
+
+      formData.append("file", selectedFile);
+      formData.append("clientId", selectedClient);
+      formData.append("projectId", selectedProject);
+
+      const response = await fetch("/api/files", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        router.push("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        setError(
+          data.message || "Failed to upload file."
+        );
+        return;
+      }
+
+      setSuccess("File uploaded successfully.");
+
+      setSelectedClient("");
+      setSelectedProject("");
+      setSelectedFile(null);
+
+      const fileInput = document.getElementById(
+        "file-upload"
+      ) as HTMLInputElement | null;
+
+      if (fileInput) {
+        fileInput.value = "";
+      }
+
+      setShowForm(false);
+
+      await fetchData();
+    } catch (error) {
+      console.error(error);
+
+      setError("Unable to connect to the server.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // =====================================================
+  // HELPERS
+  // =====================================================
+
+  const formatFileSize = (bytes: number) => {
+    if (!bytes || bytes === 0) {
+      return "0 Bytes";
+    }
+
+    const units = [
+      "Bytes",
+      "KB",
+      "MB",
+      "GB",
+    ];
+
+    const index = Math.floor(
+      Math.log(bytes) / Math.log(1024)
+    );
+
+    return `${(
+      bytes / Math.pow(1024, index)
+    ).toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+  };
+
+  const formatDate = (date: string) => {
+    if (!date) {
+      return "-";
+    }
+
+    return new Date(date).toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
     });
+  };
 
-    setShowForm(false);
-  }
+  const getClientName = (
+    client: UploadedFile["client"]
+  ) => {
+    if (typeof client === "string") {
+      const found = clients.find(
+        (item) => item._id === client
+      );
 
-  function handleDeleteFile(id: number) {
-    setFiles(files.filter((file) => file.id !== id));
-  }
+      return found?.company || found?.name || "Unknown";
+    }
+
+    return (
+      client?.company ||
+      client?.name ||
+      "Unknown"
+    );
+  };
+
+  const getProjectName = (
+    project: UploadedFile["project"]
+  ) => {
+    if (typeof project === "string") {
+      const found = projects.find(
+        (item) => item._id === project
+      );
+
+      return found?.name || "Unknown";
+    }
+
+    return project?.name || "Unknown";
+  };
+
+  const getFileIcon = (fileType: string) => {
+    if (fileType.includes("pdf")) {
+      return "📄";
+    }
+
+    if (
+      fileType.includes("image") ||
+      fileType.includes("png") ||
+      fileType.includes("jpeg")
+    ) {
+      return "🖼️";
+    }
+
+    if (
+      fileType.includes("word") ||
+      fileType.includes("document")
+    ) {
+      return "📝";
+    }
+
+    if (
+      fileType.includes("spreadsheet") ||
+      fileType.includes("excel")
+    ) {
+      return "📊";
+    }
+
+    if (
+      fileType.includes("zip") ||
+      fileType.includes("rar")
+    ) {
+      return "📦";
+    }
+
+    return "📁";
+  };
+
+  // =====================================================
+  // FILTER FILES
+  // =====================================================
+
+  const filteredFiles = files.filter((file) => {
+    const searchText = search.toLowerCase();
+
+    return (
+      file.originalName
+        .toLowerCase()
+        .includes(searchText) ||
+      getClientName(file.client)
+        .toLowerCase()
+        .includes(searchText) ||
+      getProjectName(file.project)
+        .toLowerCase()
+        .includes(searchText)
+    );
+  });
+
+  // =====================================================
+  // LOGOUT
+  // =====================================================
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error(error);
+    }
+
+    localStorage.removeItem("user");
+
+    router.push("/login");
+  };
+
+  // =====================================================
+  // PAGE
+  // =====================================================
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      {/* Top Navbar */}
-      <nav className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-6">
-        <Link href="/" className="text-xl font-bold">
-          Freelancer<span className="text-blue-500">Portal</span>
-        </Link>
+    <div className="min-h-screen bg-[#0b0f19] text-white">
 
-        <div className="flex items-center gap-5">
-          <span className="text-sm text-slate-400">
-            Welcome, Freelancer
-          </span>
+      {/* NAVBAR */}
+
+      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
+
+        <div className="flex h-16 items-center justify-between px-6">
 
           <Link
-            href="/login"
-            className="text-sm text-slate-400 hover:text-white"
+            href="/freelancer/dashboard"
+            className="text-xl font-bold"
           >
-            Logout
+            Freelancer<span className="text-blue-500">
+              Portal
+            </span>
           </Link>
-        </div>
-      </nav>
 
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 p-5">
-          <div className="mb-8">
-            <p className="text-xs uppercase tracking-wider text-slate-500">
+          <div className="flex items-center gap-5">
+
+            <span className="text-sm text-gray-300">
               Freelancer
-            </p>
+            </span>
 
-            <h2 className="text-lg font-semibold mt-1">
-              Dashboard
-            </h2>
+            <button
+              onClick={handleLogout}
+              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
+            >
+              Logout
+            </button>
+
           </div>
 
-          <nav className="space-y-2">
-            <SidebarLink
-              href="/freelancer/dashboard"
-              label="Dashboard"
-              icon="📊"
-            />
+        </div>
 
-            <SidebarLink
-              href="/freelancer/clients"
-              label="Clients"
-              icon="👥"
-            />
+      </header>
 
-            <SidebarLink
-              href="/freelancer/projects"
-              label="Projects"
-              icon="📁"
-            />
+      {/* SIDEBAR */}
 
-            <SidebarLink
-              href="/freelancer/invoices"
-              label="Invoices"
-              icon="🧾"
-            />
+      <aside className="fixed bottom-0 left-0 top-16 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
 
-            <SidebarLink
-              href="/freelancer/payments"
-              label="Payments"
-              icon="💳"
-            />
+        <nav className="space-y-2 p-4">
 
-            <SidebarLink
-              href="/freelancer/files"
-              label="Files"
-              icon="📎"
-              active
-            />
+          <Link
+            href="/freelancer/dashboard"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Dashboard
+          </Link>
 
-            <SidebarLink
-              href="/freelancer/messages"
-              label="Messages"
-              icon="💬"
-            />
+          <Link
+            href="/freelancer/clients"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Clients
+          </Link>
 
-            <SidebarLink
-              href="/freelancer/reports"
-              label="Reports"
-              icon="📈"
-            />
-          </nav>
-        </aside>
+          <Link
+            href="/freelancer/projects"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Projects
+          </Link>
 
-        {/* Main Content */}
-        <section className="flex-1 p-8">
-          {/* Header */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+          <Link
+            href="/freelancer/invoices"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Invoices
+          </Link>
+
+          <Link
+            href="/freelancer/payments"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Payments
+          </Link>
+
+          <Link
+            href="/freelancer/files"
+            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
+          >
+            Files
+          </Link>
+
+          <Link
+            href="/freelancer/messages"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Messages
+          </Link>
+
+          <Link
+            href="/freelancer/reports"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Reports
+          </Link>
+
+        </nav>
+
+      </aside>
+
+      {/* MAIN */}
+
+      <main className="pt-16 md:ml-64">
+
+        <div className="p-6 md:p-8">
+
+          {/* HEADER */}
+
+          <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
+
             <div>
+
               <h1 className="text-3xl font-bold">
                 Files
               </h1>
 
-              <p className="text-slate-400 mt-2">
-                Manage project files and documents shared with clients.
+              <p className="mt-2 text-gray-400">
+                Manage project files and documents.
               </p>
+
             </div>
 
             <button
-              onClick={() => setShowForm(!showForm)}
-              className="px-5 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium"
+              onClick={() => {
+                setShowForm(!showForm);
+                setError("");
+                setSuccess("");
+              }}
+              className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium transition hover:bg-blue-500"
             >
-              + Add File
+              {showForm
+                ? "Close Form"
+                : "+ Upload File"}
             </button>
+
           </div>
 
-          {/* File Form */}
+          {/* SUCCESS */}
+
+          {success && (
+            <div className="mb-6 rounded-lg border border-green-500/20 bg-green-500/10 p-4 text-green-400">
+              {success}
+            </div>
+          )}
+
+          {/* ERROR */}
+
+          {error && (
+            <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-red-400">
+              {error}
+            </div>
+          )}
+
+          {/* UPLOAD FORM */}
+
           {showForm && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8">
-              <h2 className="text-xl font-semibold mb-6">
-                Add File
-              </h2>
+
+            <div className="mb-8 rounded-xl border border-white/10 bg-[#111827] p-6">
+
+              <div className="mb-6">
+
+                <h2 className="text-xl font-semibold">
+                  Upload File
+                </h2>
+
+                <p className="mt-1 text-sm text-gray-500">
+                  Attach a file to a specific client and
+                  project.
+                </p>
+
+              </div>
 
               <form
-                onSubmit={handleAddFile}
-                className="grid grid-cols-1 md:grid-cols-2 gap-5"
+                onSubmit={handleUpload}
+                className="grid gap-5 md:grid-cols-2"
               >
-                {/* File Name */}
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    File Name
-                  </label>
 
-                  <input
-                    type="text"
-                    value={newFile.name}
-                    onChange={(e) =>
-                      setNewFile({
-                        ...newFile,
-                        name: e.target.value,
-                      })
-                    }
-                    placeholder="project-design.pdf"
-                    className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
+                {/* CLIENT */}
 
-                {/* Client */}
                 <div>
-                  <label className="block text-sm font-medium mb-2">
+
+                  <label className="mb-2 block text-sm text-gray-400">
                     Client
                   </label>
 
-                  <input
-                    type="text"
-                    value={newFile.client}
-                    onChange={(e) =>
-                      setNewFile({
-                        ...newFile,
-                        client: e.target.value,
-                      })
-                    }
-                    placeholder="Client name"
-                    className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
-                  />
+                  <select
+                    value={selectedClient}
+                    onChange={handleClientChange}
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
+                  >
+
+                    <option value="">
+                      Select Client
+                    </option>
+
+                    {clients.map((client) => (
+
+                      <option
+                        key={client._id}
+                        value={client._id}
+                      >
+                        {client.company} — {client.name}
+                      </option>
+
+                    ))}
+
+                  </select>
+
                 </div>
 
-                {/* Project */}
+                {/* PROJECT */}
+
                 <div>
-                  <label className="block text-sm font-medium mb-2">
+
+                  <label className="mb-2 block text-sm text-gray-400">
                     Project
                   </label>
 
-                  <input
-                    type="text"
-                    value={newFile.project}
-                    onChange={(e) =>
-                      setNewFile({
-                        ...newFile,
-                        project: e.target.value,
-                      })
-                    }
-                    placeholder="Project name"
-                    className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                {/* File Size */}
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    File Size
-                  </label>
-
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={newFile.size}
-                    onChange={(e) =>
-                      setNewFile({
-                        ...newFile,
-                        size: e.target.value,
-                      })
-                    }
-                    placeholder="2.5"
-                    className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                {/* File Type */}
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    File Type
-                  </label>
-
                   <select
-                    value={newFile.type}
-                    onChange={(e) =>
-                      setNewFile({
-                        ...newFile,
-                        type: e.target.value,
-                      })
+                    value={selectedProject}
+                    onChange={(event) =>
+                      setSelectedProject(
+                        event.target.value
+                      )
                     }
-                    className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
+                    disabled={!selectedClient}
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-50 focus:border-blue-500"
                   >
-                    <option>PDF</option>
-                    <option>Document</option>
-                    <option>Image</option>
-                    <option>Design</option>
-                    <option>Archive</option>
-                    <option>Other</option>
+
+                    <option value="">
+                      {selectedClient
+                        ? "Select Project"
+                        : "Select a client first"}
+                    </option>
+
+                    {availableProjects.map(
+                      (project) => (
+
+                        <option
+                          key={project._id}
+                          value={project._id}
+                        >
+                          {project.name}
+                        </option>
+
+                      )
+                    )}
+
                   </select>
+
                 </div>
 
-                {/* Buttons */}
-                <div className="md:col-span-2 flex justify-end gap-3">
+                {/* FILE */}
+
+                <div className="md:col-span-2">
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    File
+                  </label>
+
+                  <input
+                    id="file-upload"
+                    type="file"
+                    onChange={handleFileChange}
+                    className="w-full cursor-pointer rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-sm text-gray-300 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-blue-500"
+                  />
+
+                  {selectedFile && (
+
+                    <div className="mt-3 rounded-lg bg-white/5 p-3 text-sm">
+
+                      <p className="font-medium">
+                        {selectedFile.name}
+                      </p>
+
+                      <p className="mt-1 text-gray-500">
+                        {formatFileSize(
+                          selectedFile.size
+                        )}
+                      </p>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+                {/* BUTTONS */}
+
+                <div className="flex gap-3 md:col-span-2">
+
+                  <button
+                    type="submit"
+                    disabled={uploading}
+                    className="rounded-lg bg-blue-600 px-6 py-3 text-sm font-medium transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {uploading
+                      ? "Uploading..."
+                      : "Upload File"}
+                  </button>
+
                   <button
                     type="button"
-                    onClick={() => setShowForm(false)}
-                    className="px-5 py-2.5 rounded-lg border border-slate-700 hover:bg-slate-800"
+                    onClick={() => {
+                      setShowForm(false);
+                      setError("");
+                    }}
+                    className="rounded-lg border border-white/10 px-6 py-3 text-sm text-gray-300 transition hover:bg-white/5"
                   >
                     Cancel
                   </button>
 
-                  <button
-                    type="submit"
-                    className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700"
-                  >
-                    Add File
-                  </button>
                 </div>
+
               </form>
+
             </div>
+
           )}
 
-          {/* Search */}
-          <div className="mb-6">
+          {/* SEARCH */}
+
+          <div className="mb-6 flex flex-col gap-4 md:flex-row">
+
             <input
               type="text"
-              placeholder="Search files..."
-              className="w-full px-4 py-3 rounded-lg bg-slate-900 border border-slate-800 focus:outline-none focus:border-blue-500"
+              value={search}
+              onChange={(event) =>
+                setSearch(event.target.value)
+              }
+              placeholder="Search files, clients or projects..."
+              className="flex-1 rounded-lg border border-white/10 bg-[#111827] px-4 py-3 text-white outline-none placeholder:text-gray-600 focus:border-blue-500"
             />
+
+            <button
+              onClick={fetchData}
+              className="rounded-lg border border-white/10 bg-[#111827] px-5 py-3 text-sm text-gray-300 transition hover:bg-white/5"
+            >
+              ↻ Refresh
+            </button>
+
           </div>
 
-          {/* Files Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {files.map((file) => (
-              <div
-                key={file.id}
-                className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:border-blue-500/50 transition"
-              >
-                {/* File Icon */}
-                <div className="flex items-start justify-between">
-                  <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center text-2xl">
-                    {getFileIcon(file.type)}
-                  </div>
+          {/* FILE COUNT */}
 
-                  <span className="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-300">
-                    {file.type}
-                  </span>
-                </div>
+          <div className="mb-5">
 
-                {/* File Information */}
-                <h2 className="font-semibold mt-5 truncate">
-                  {file.name}
-                </h2>
+            <p className="text-sm text-gray-500">
 
-                <p className="text-sm text-blue-400 mt-1">
-                  {file.client}
-                </p>
+              {loading
+                ? "Loading files..."
+                : `${filteredFiles.length} file${
+                    filteredFiles.length !== 1
+                      ? "s"
+                      : ""
+                  }`}
 
-                <p className="text-sm text-slate-400 mt-3">
-                  {file.project}
-                </p>
+            </p>
 
-                <div className="border-t border-slate-800 mt-5 pt-4 space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">
-                      Size
-                    </span>
+          </div>
 
-                    <span className="text-slate-300">
-                      {file.size}
-                    </span>
-                  </div>
+          {/* FILES */}
 
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">
-                      Uploaded
-                    </span>
+          {loading ? (
 
-                    <span className="text-slate-300">
-                      {file.uploadedDate}
-                    </span>
-                  </div>
-                </div>
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-10 text-center text-gray-500">
+              Loading files...
+            </div>
 
-                {/* Actions */}
-                <div className="flex gap-3 mt-6">
-                  <button className="flex-1 py-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-sm">
-                    View
-                  </button>
+          ) : filteredFiles.length === 0 ? (
 
-                  <button className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-sm">
-                    Download
-                  </button>
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-12 text-center">
 
-                  <button
-                    onClick={() => handleDeleteFile(file.id)}
-                    className="px-3 py-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 text-sm"
-                  >
-                    Delete
-                  </button>
-                </div>
+              <div className="text-5xl">
+                📁
               </div>
-            ))}
+
+              <h2 className="mt-5 text-xl font-semibold">
+                No files yet
+              </h2>
+
+              <p className="mt-2 text-gray-500">
+                Upload your first project file to see it
+                here.
+              </p>
+
+              <button
+                onClick={() => setShowForm(true)}
+                className="mt-6 rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium hover:bg-blue-500"
+              >
+                + Upload File
+              </button>
+
+            </div>
+
+          ) : (
+
+            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+
+              {filteredFiles.map((file) => (
+
+                <div
+                  key={file._id}
+                  className="rounded-xl border border-white/10 bg-[#111827] p-5 transition hover:border-white/20"
+                >
+
+                  {/* FILE ICON */}
+
+                  <div className="mb-5 flex items-start justify-between">
+
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10 text-2xl">
+                      {getFileIcon(file.fileType)}
+                    </div>
+
+                    <span className="text-xs text-gray-500">
+                      {formatFileSize(file.fileSize)}
+                    </span>
+
+                  </div>
+
+                  {/* FILE NAME */}
+
+                  <h3
+                    className="truncate font-semibold"
+                    title={file.originalName}
+                  >
+                    {file.originalName}
+                  </h3>
+
+                  {/* CLIENT */}
+
+                  <p className="mt-3 text-sm text-gray-400">
+                    Client:{" "}
+                    <span className="text-gray-300">
+                      {getClientName(file.client)}
+                    </span>
+                  </p>
+
+                  {/* PROJECT */}
+
+                  <p className="mt-1 text-sm text-gray-400">
+                    Project:{" "}
+                    <span className="text-gray-300">
+                      {getProjectName(file.project)}
+                    </span>
+                  </p>
+
+                  {/* DATE */}
+
+                  <p className="mt-3 text-xs text-gray-600">
+                    Uploaded{" "}
+                    {formatDate(file.createdAt)}
+                  </p>
+
+                  {/* ACTION */}
+
+                  <div className="mt-5 border-t border-white/10 pt-4">
+
+                    <a
+                      href={file.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full rounded-lg bg-white/5 px-4 py-2.5 text-center text-sm font-medium text-blue-400 transition hover:bg-white/10"
+                    >
+                      View / Download
+                    </a>
+
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          )}
+
+          {/* FOOTER */}
+
+          <div className="mt-10 border-t border-white/10 py-6 text-center text-sm text-gray-600">
+            FreelancerPortal © 2026 — Freelancer Invoice &
+            Client Portal
           </div>
 
-          <div className="mt-6 text-sm text-slate-500">
-            Showing {files.length} files
-          </div>
-        </section>
-      </div>
-    </main>
-  );
-}
+        </div>
 
-function getFileIcon(type: string) {
-  switch (type) {
-    case "PDF":
-      return "📄";
+      </main>
 
-    case "Document":
-      return "📝";
-
-    case "Image":
-      return "🖼️";
-
-    case "Design":
-      return "🎨";
-
-    case "Archive":
-      return "📦";
-
-    default:
-      return "📎";
-  }
-}
-
-function SidebarLink({
-  href,
-  label,
-  icon,
-  active = false,
-}: {
-  href: string;
-  label: string;
-  icon: string;
-  active?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition ${
-        active
-          ? "bg-blue-600 text-white"
-          : "text-slate-400 hover:bg-slate-800 hover:text-white"
-      }`}
-    >
-      <span>{icon}</span>
-      <span>{label}</span>
-    </Link>
+    </div>
   );
 }

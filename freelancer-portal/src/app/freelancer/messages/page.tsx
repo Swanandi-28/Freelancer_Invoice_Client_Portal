@@ -1,461 +1,960 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+type Client = {
+  _id: string;
+  name: string;
+  company: string;
+  email: string;
+};
+
+type Project = {
+  _id: string;
+  name: string;
+  client:
+    | string
+    | {
+        _id: string;
+        name: string;
+        company: string;
+      };
+};
 
 type Message = {
-  id: number;
-  sender: "Freelancer" | "Client";
-  text: string;
-  time: string;
+  _id: string;
+  message: string;
+  senderRole: "freelancer" | "client";
+  senderId: string;
+  read: boolean;
+  createdAt: string;
+
+  client:
+    | string
+    | {
+        _id: string;
+        name: string;
+        company: string;
+      };
+
+  project?:
+    | string
+    | {
+        _id: string;
+        name: string;
+      };
 };
 
-type Conversation = {
-  id: number;
-  client: string;
-  company: string;
-  project: string;
-  lastMessage: string;
-  time: string;
-  unread: number;
-};
+export default function FreelancerMessagesPage() {
+  const router = useRouter();
 
-const initialConversations: Conversation[] = [
-  {
-    id: 1,
-    client: "Rahul Sharma",
-    company: "ABC Company",
-    project: "E-commerce Website",
-    lastMessage: "Can you share the latest design?",
-    time: "10:30 AM",
-    unread: 2,
-  },
-  {
-    id: 2,
-    client: "Priya Mehta",
-    company: "XYZ Solutions",
-    project: "Brand Identity Design",
-    lastMessage: "The logo looks great!",
-    time: "Yesterday",
-    unread: 0,
-  },
-  {
-    id: 3,
-    client: "Amit Patil",
-    company: "Tech Startup",
-    project: "Mobile App UI",
-    lastMessage: "I have reviewed the screens.",
-    time: "28 Sep",
-    unread: 1,
-  },
-];
+  const [clients, setClients] = useState<Client[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
 
-const initialMessages: Record<number, Message[]> = {
-  1: [
-    {
-      id: 1,
-      sender: "Client",
-      text: "Hi, how is the website development going?",
-      time: "10:10 AM",
-    },
-    {
-      id: 2,
-      sender: "Freelancer",
-      text: "Hi Rahul! The main pages are completed. I am working on the checkout section now.",
-      time: "10:18 AM",
-    },
-    {
-      id: 3,
-      sender: "Client",
-      text: "Can you share the latest design?",
-      time: "10:30 AM",
-    },
-  ],
-  2: [
-    {
-      id: 1,
-      sender: "Freelancer",
-      text: "I have uploaded the updated logo variations.",
-      time: "Yesterday",
-    },
-    {
-      id: 2,
-      sender: "Client",
-      text: "The logo looks great!",
-      time: "Yesterday",
-    },
-  ],
-  3: [
-    {
-      id: 1,
-      sender: "Client",
-      text: "I have reviewed the screens.",
-      time: "28 Sep",
-    },
-  ],
-};
+  const [selectedClient, setSelectedClient] =
+    useState<string>("");
 
-export default function MessagesPage() {
-  const [conversations, setConversations] =
-    useState<Conversation[]>(initialConversations);
+  const [selectedProject, setSelectedProject] =
+    useState<string>("");
 
-  const [selectedConversation, setSelectedConversation] =
-    useState<number>(1);
+  const [messageText, setMessageText] =
+    useState("");
 
-  const [messages, setMessages] =
-    useState<Record<number, Message[]>>(initialMessages);
+  const [search, setSearch] = useState("");
 
-  const [messageText, setMessageText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
 
-  const conversation = conversations.find(
-    (item) => item.id === selectedConversation
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  // =====================================================
+  // LOAD CLIENTS + PROJECTS + MESSAGES
+  // =====================================================
+
+  useEffect(() => {
+    loadInitialData();
+  }, []);
+
+  const loadInitialData = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const [
+        clientsResponse,
+        projectsResponse,
+        messagesResponse,
+      ] = await Promise.all([
+        fetch("/api/clients", {
+          cache: "no-store",
+        }),
+
+        fetch("/api/projects", {
+          cache: "no-store",
+        }),
+
+        fetch("/api/messages", {
+          cache: "no-store",
+        }),
+      ]);
+
+      const clientsData = await clientsResponse.json();
+      const projectsData = await projectsResponse.json();
+      const messagesData = await messagesResponse.json();
+
+      if (
+        clientsResponse.status === 401 ||
+        projectsResponse.status === 401 ||
+        messagesResponse.status === 401
+      ) {
+        router.push("/login");
+        return;
+      }
+
+      if (!clientsResponse.ok) {
+        throw new Error(
+          clientsData.message ||
+            "Failed to load clients."
+        );
+      }
+
+      if (!projectsResponse.ok) {
+        throw new Error(
+          projectsData.message ||
+            "Failed to load projects."
+        );
+      }
+
+      if (!messagesResponse.ok) {
+        throw new Error(
+          messagesData.message ||
+            "Failed to load messages."
+        );
+      }
+
+      const loadedClients =
+        clientsData.clients || [];
+
+      setClients(loadedClients);
+
+      setProjects(
+        projectsData.projects || []
+      );
+
+      setMessages(
+        messagesData.messages || []
+      );
+
+      // Automatically select first client
+      if (
+        loadedClients.length > 0 &&
+        !selectedClient
+      ) {
+        setSelectedClient(
+          loadedClients[0]._id
+        );
+      }
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load messages."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =====================================================
+  // GET CLIENT MESSAGES
+  // =====================================================
+
+  const loadClientMessages = async (
+    clientId: string
+  ) => {
+    try {
+      setError("");
+
+      const response = await fetch(
+        `/api/messages?clientId=${clientId}`,
+        {
+          cache: "no-store",
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        router.push("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to load conversation."
+        );
+      }
+
+      setMessages(data.messages || []);
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load conversation."
+      );
+    }
+  };
+
+  // =====================================================
+  // CLIENT CHANGE
+  // =====================================================
+
+  const handleClientSelect = (
+    clientId: string
+  ) => {
+    setSelectedClient(clientId);
+
+    setSelectedProject("");
+
+    setMessageText("");
+
+    loadClientMessages(clientId);
+  };
+
+  // =====================================================
+  // PROJECTS FOR SELECTED CLIENT
+  // =====================================================
+
+  const availableProjects = useMemo(() => {
+    if (!selectedClient) {
+      return [];
+    }
+
+    return projects.filter((project) => {
+      const clientId =
+        typeof project.client === "string"
+          ? project.client
+          : project.client?._id;
+
+      return clientId === selectedClient;
+    });
+  }, [projects, selectedClient]);
+
+  // =====================================================
+  // SELECTED CLIENT
+  // =====================================================
+
+  const selectedClientData = clients.find(
+    (client) =>
+      client._id === selectedClient
   );
 
-  const currentMessages =
-    messages[selectedConversation] || [];
+  // =====================================================
+  // SEND MESSAGE
+  // =====================================================
 
-  function selectConversation(id: number) {
-    setSelectedConversation(id);
+  const handleSendMessage = async () => {
+    const trimmedMessage =
+      messageText.trim();
 
-    setConversations((previous) =>
-      previous.map((item) =>
-        item.id === id
-          ? { ...item, unread: 0 }
-          : item
-      )
-    );
-  }
-
-  function handleSendMessage(e: React.FormEvent) {
-    e.preventDefault();
-
-    if (!messageText.trim()) {
+    if (!selectedClient) {
+      setError("Please select a client.");
       return;
     }
 
-    const newMessage: Message = {
-      id: Date.now(),
-      sender: "Freelancer",
-      text: messageText.trim(),
-      time: new Date().toLocaleTimeString([], {
+    if (!trimmedMessage) {
+      return;
+    }
+
+    try {
+      setSending(true);
+      setError("");
+      setSuccess("");
+
+      const response = await fetch(
+        "/api/messages",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            clientId: selectedClient,
+            projectId:
+              selectedProject || undefined,
+            message: trimmedMessage,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        router.push("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        setError(
+          data.message ||
+            "Failed to send message."
+        );
+        return;
+      }
+
+      setMessageText("");
+
+      setSuccess("Message sent.");
+
+      // Reload conversation
+      await loadClientMessages(
+        selectedClient
+      );
+
+      // Remove success message after short delay
+      setTimeout(() => {
+        setSuccess("");
+      }, 2000);
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        "Unable to connect to the server."
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // =====================================================
+  // ENTER TO SEND
+  // =====================================================
+
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+
+      handleSendMessage();
+    }
+  };
+
+  // =====================================================
+  // FILTER CLIENTS
+  // =====================================================
+
+  const filteredClients =
+    clients.filter((client) => {
+      const searchText =
+        search.toLowerCase();
+
+      return (
+        client.name
+          .toLowerCase()
+          .includes(searchText) ||
+        client.company
+          .toLowerCase()
+          .includes(searchText) ||
+        client.email
+          .toLowerCase()
+          .includes(searchText)
+      );
+    });
+
+  // =====================================================
+  // FORMAT TIME
+  // =====================================================
+
+  const formatMessageTime = (
+    date: string
+  ) => {
+    return new Date(date).toLocaleString(
+      "en-IN",
+      {
+        day: "2-digit",
+        month: "short",
         hour: "2-digit",
         minute: "2-digit",
-      }),
-    };
-
-    setMessages((previous) => ({
-      ...previous,
-      [selectedConversation]: [
-        ...(previous[selectedConversation] || []),
-        newMessage,
-      ],
-    }));
-
-    setConversations((previous) =>
-      previous.map((item) =>
-        item.id === selectedConversation
-          ? {
-              ...item,
-              lastMessage: messageText.trim(),
-              time: "Just now",
-            }
-          : item
-      )
+      }
     );
+  };
 
-    setMessageText("");
-  }
+  // =====================================================
+  // LOGOUT
+  // =====================================================
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error(error);
+    }
+
+    localStorage.removeItem("user");
+
+    router.push("/login");
+  };
+
+  // =====================================================
+  // PAGE
+  // =====================================================
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      {/* Top Navbar */}
-      <nav className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-6">
-        <Link href="/" className="text-xl font-bold">
-          Freelancer<span className="text-blue-500">Portal</span>
-        </Link>
+    <div className="min-h-screen bg-[#0b0f19] text-white">
 
-        <div className="flex items-center gap-5">
-          <span className="text-sm text-slate-400">
-            Welcome, Freelancer
-          </span>
+      {/* =================================================
+          NAVBAR
+      ================================================= */}
+
+      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
+
+        <div className="flex h-16 items-center justify-between px-6">
 
           <Link
-            href="/login"
-            className="text-sm text-slate-400 hover:text-white"
+            href="/freelancer/dashboard"
+            className="text-xl font-bold"
           >
-            Logout
+            Freelancer
+            <span className="text-blue-500">
+              Portal
+            </span>
           </Link>
-        </div>
-      </nav>
 
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 p-5">
-          <div className="mb-8">
-            <p className="text-xs uppercase tracking-wider text-slate-500">
+          <div className="flex items-center gap-5">
+
+            <span className="text-sm text-gray-300">
               Freelancer
-            </p>
+            </span>
 
-            <h2 className="text-lg font-semibold mt-1">
-              Dashboard
-            </h2>
+            <button
+              onClick={handleLogout}
+              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
+            >
+              Logout
+            </button>
+
           </div>
 
-          <nav className="space-y-2">
-            <SidebarLink
-              href="/freelancer/dashboard"
-              label="Dashboard"
-              icon="📊"
-            />
+        </div>
 
-            <SidebarLink
-              href="/freelancer/clients"
-              label="Clients"
-              icon="👥"
-            />
+      </header>
 
-            <SidebarLink
-              href="/freelancer/projects"
-              label="Projects"
-              icon="📁"
-            />
+      {/* =================================================
+          SIDEBAR
+      ================================================= */}
 
-            <SidebarLink
-              href="/freelancer/invoices"
-              label="Invoices"
-              icon="🧾"
-            />
+      <aside className="fixed bottom-0 left-0 top-16 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
 
-            <SidebarLink
-              href="/freelancer/payments"
-              label="Payments"
-              icon="💳"
-            />
+        <nav className="space-y-2 p-4">
 
-            <SidebarLink
-              href="/freelancer/files"
-              label="Files"
-              icon="📎"
-            />
+          <Link
+            href="/freelancer/dashboard"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Dashboard
+          </Link>
 
-            <SidebarLink
-              href="/freelancer/messages"
-              label="Messages"
-              icon="💬"
-              active
-            />
+          <Link
+            href="/freelancer/clients"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Clients
+          </Link>
 
-            <SidebarLink
-              href="/freelancer/reports"
-              label="Reports"
-              icon="📈"
-            />
-          </nav>
-        </aside>
+          <Link
+            href="/freelancer/projects"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Projects
+          </Link>
 
-        {/* Main Content */}
-        <section className="flex-1 p-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold">
-              Messages
-            </h1>
+          <Link
+            href="/freelancer/invoices"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Invoices
+          </Link>
 
-            <p className="text-slate-400 mt-2">
-              Communicate with your clients and manage project conversations.
-            </p>
+          <Link
+            href="/freelancer/payments"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Payments
+          </Link>
+
+          <Link
+            href="/freelancer/files"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Files
+          </Link>
+
+          <Link
+            href="/freelancer/messages"
+            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
+          >
+            Messages
+          </Link>
+
+          <Link
+            href="/freelancer/reports"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Reports
+          </Link>
+
+        </nav>
+
+      </aside>
+
+      {/* =================================================
+          MAIN
+      ================================================= */}
+
+      <main className="pt-16 md:ml-64">
+
+        <div className="p-6 md:p-8">
+
+          {/* HEADER */}
+
+          <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
+
+            <div>
+
+              <h1 className="text-3xl font-bold">
+                Messages
+              </h1>
+
+              <p className="mt-2 text-gray-400">
+                Communicate with your clients.
+              </p>
+
+            </div>
+
+            <button
+              onClick={loadInitialData}
+              className="rounded-lg border border-white/10 bg-[#111827] px-5 py-3 text-sm text-gray-300 transition hover:bg-white/5"
+            >
+              ↻ Refresh
+            </button>
+
           </div>
 
-          {/* Messaging Layout */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden h-[650px] flex">
-            {/* Conversation List */}
-            <div className="w-full md:w-80 border-r border-slate-800 flex flex-col">
-              <div className="p-5 border-b border-slate-800">
+          {/* ERROR */}
+
+          {error && (
+
+            <div className="mb-5 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">
+              {error}
+            </div>
+
+          )}
+
+          {/* SUCCESS */}
+
+          {success && (
+
+            <div className="mb-5 rounded-lg border border-green-500/20 bg-green-500/10 p-4 text-sm text-green-400">
+              {success}
+            </div>
+
+          )}
+
+          {/* =================================================
+              MESSAGES CONTAINER
+          ================================================= */}
+
+          <div className="grid min-h-[650px] overflow-hidden rounded-xl border border-white/10 bg-[#111827] md:grid-cols-[300px_1fr]">
+
+            {/* =================================================
+                CLIENT LIST
+            ================================================= */}
+
+            <div className="border-b border-white/10 md:border-b-0 md:border-r">
+
+              <div className="border-b border-white/10 p-5">
+
                 <h2 className="font-semibold">
                   Conversations
                 </h2>
 
-                <p className="text-xs text-slate-500 mt-1">
-                  {conversations.length} active conversations
+                <p className="mt-1 text-xs text-gray-500">
+                  {clients.length} client
+                  {clients.length !== 1
+                    ? "s"
+                    : ""}
                 </p>
+
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(event) =>
+                    setSearch(
+                      event.target.value
+                    )
+                  }
+                  placeholder="Search clients..."
+                  className="mt-4 w-full rounded-lg border border-white/10 bg-[#0b0f19] px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-600 focus:border-blue-500"
+                />
+
               </div>
 
-              <div className="flex-1 overflow-y-auto">
-                {conversations.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() =>
-                      selectConversation(item.id)
+              <div className="max-h-[550px] overflow-y-auto">
+
+                {loading ? (
+
+                  <div className="p-5 text-sm text-gray-500">
+                    Loading clients...
+                  </div>
+
+                ) : filteredClients.length ===
+                  0 ? (
+
+                  <div className="p-5 text-center text-sm text-gray-500">
+                    No clients found.
+                  </div>
+
+                ) : (
+
+                  filteredClients.map(
+                    (client) => {
+
+                      const isSelected =
+                        client._id ===
+                        selectedClient;
+
+                      return (
+
+                        <button
+                          key={client._id}
+                          onClick={() =>
+                            handleClientSelect(
+                              client._id
+                            )
+                          }
+                          className={`w-full border-b border-white/5 p-4 text-left transition ${
+                            isSelected
+                              ? "bg-blue-600/10"
+                              : "hover:bg-white/[0.03]"
+                          }`}
+                        >
+
+                          <div className="flex items-center gap-3">
+
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-500/10 font-semibold text-blue-400">
+                              {client.company
+                                .charAt(0)
+                                .toUpperCase()}
+                            </div>
+
+                            <div className="min-w-0">
+
+                              <p
+                                className={`truncate text-sm font-medium ${
+                                  isSelected
+                                    ? "text-blue-400"
+                                    : "text-white"
+                                }`}
+                              >
+                                {client.company}
+                              </p>
+
+                              <p className="truncate text-xs text-gray-500">
+                                {client.name}
+                              </p>
+
+                            </div>
+
+                          </div>
+
+                        </button>
+
+                      );
                     }
-                    className={`w-full text-left p-5 border-b border-slate-800 transition ${
-                      selectedConversation === item.id
-                        ? "bg-blue-600/10 border-l-2 border-l-blue-500"
-                        : "hover:bg-slate-800/50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-semibold shrink-0">
-                          {item.client.charAt(0)}
-                        </div>
+                  )
 
-                        <div className="min-w-0">
-                          <p className="font-medium truncate">
-                            {item.client}
-                          </p>
+                )}
 
-                          <p className="text-xs text-slate-500 truncate">
-                            {item.company}
-                          </p>
-                        </div>
-                      </div>
-
-                      {item.unread > 0 && (
-                        <span className="bg-blue-600 text-white text-xs rounded-full min-w-5 h-5 flex items-center justify-center">
-                          {item.unread}
-                        </span>
-                      )}
-                    </div>
-
-                    <p className="text-xs text-blue-400 mt-3">
-                      {item.project}
-                    </p>
-
-                    <div className="flex justify-between gap-3 mt-2">
-                      <p className="text-xs text-slate-400 truncate">
-                        {item.lastMessage}
-                      </p>
-
-                      <span className="text-[11px] text-slate-600 whitespace-nowrap">
-                        {item.time}
-                      </span>
-                    </div>
-                  </button>
-                ))}
               </div>
+
             </div>
 
-            {/* Chat Area */}
-            <div className="hidden md:flex flex-1 flex-col">
-              {conversation ? (
+            {/* =================================================
+                CHAT
+            ================================================= */}
+
+            <div className="flex min-h-[600px] flex-col">
+
+              {!selectedClient ? (
+
+                <div className="flex flex-1 flex-col items-center justify-center p-10 text-center">
+
+                  <div className="text-5xl">
+                    💬
+                  </div>
+
+                  <h2 className="mt-5 text-xl font-semibold">
+                    Select a conversation
+                  </h2>
+
+                  <p className="mt-2 max-w-md text-sm text-gray-500">
+                    Select a client from the left
+                    to view your conversation.
+                  </p>
+
+                </div>
+
+              ) : (
+
                 <>
-                  {/* Chat Header */}
-                  <div className="p-5 border-b border-slate-800">
+
+                  {/* CHAT HEADER */}
+
+                  <div className="border-b border-white/10 p-5">
+
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-semibold">
-                        {conversation.client.charAt(0)}
+
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-500/10 font-semibold text-blue-400">
+                        {selectedClientData?.company
+                          ?.charAt(0)
+                          .toUpperCase()}
                       </div>
 
                       <div>
+
                         <h2 className="font-semibold">
-                          {conversation.client}
+                          {
+                            selectedClientData?.company
+                          }
                         </h2>
 
-                        <p className="text-xs text-slate-500">
-                          {conversation.company} ·{" "}
-                          {conversation.project}
+                        <p className="text-xs text-gray-500">
+                          {
+                            selectedClientData?.email
+                          }
                         </p>
+
                       </div>
+
                     </div>
+
                   </div>
 
-                  {/* Messages */}
-                  <div className="flex-1 overflow-y-auto p-6 space-y-5">
-                    {currentMessages.map((message) => (
-                      <div
-                        key={message.id}
-                        className={`flex ${
-                          message.sender === "Freelancer"
-                            ? "justify-end"
-                            : "justify-start"
-                        }`}
-                      >
-                        <div
-                          className={`max-w-[70%] ${
-                            message.sender === "Freelancer"
-                              ? "items-end"
-                              : "items-start"
-                          } flex flex-col`}
-                        >
-                          <div
-                            className={`px-4 py-3 rounded-2xl text-sm ${
-                              message.sender === "Freelancer"
-                                ? "bg-blue-600 text-white rounded-br-sm"
-                                : "bg-slate-800 text-slate-200 rounded-bl-sm"
-                            }`}
-                          >
-                            {message.text}
-                          </div>
+                  {/* MESSAGE LIST */}
 
-                          <span className="text-[11px] text-slate-600 mt-1">
-                            {message.time}
-                          </span>
+                  <div className="flex-1 space-y-4 overflow-y-auto p-5">
+
+                    {messages.length ===
+                    0 ? (
+
+                      <div className="flex h-full min-h-[400px] flex-col items-center justify-center text-center">
+
+                        <div className="text-4xl">
+                          💬
                         </div>
+
+                        <h3 className="mt-4 font-semibold">
+                          No messages yet
+                        </h3>
+
+                        <p className="mt-2 text-sm text-gray-500">
+                          Start the conversation
+                          with this client.
+                        </p>
+
                       </div>
-                    ))}
+
+                    ) : (
+
+                      messages.map(
+                        (message) => {
+
+                          const isFreelancer =
+                            message.senderRole ===
+                            "freelancer";
+
+                          return (
+
+                            <div
+                              key={message._id}
+                              className={`flex ${
+                                isFreelancer
+                                  ? "justify-end"
+                                  : "justify-start"
+                              }`}
+                            >
+
+                              <div
+                                className={`max-w-[75%] rounded-2xl px-4 py-3 ${
+                                  isFreelancer
+                                    ? "rounded-br-md bg-blue-600"
+                                    : "rounded-bl-md bg-white/5"
+                                }`}
+                              >
+
+                                <p className="whitespace-pre-wrap text-sm leading-6">
+                                  {
+                                    message.message
+                                  }
+                                </p>
+
+                                <div
+                                  className={`mt-2 text-[10px] ${
+                                    isFreelancer
+                                      ? "text-blue-100"
+                                      : "text-gray-500"
+                                  }`}
+                                >
+                                  {formatMessageTime(
+                                    message.createdAt
+                                  )}
+
+                                  {message.project &&
+                                    typeof message.project !==
+                                      "string" && (
+                                      <>
+                                        {" • "}
+                                        {
+                                          message
+                                            .project
+                                            .name
+                                        }
+                                      </>
+                                    )}
+                                </div>
+
+                              </div>
+
+                            </div>
+
+                          );
+                        }
+                      )
+
+                    )}
+
                   </div>
 
-                  {/* Message Input */}
-                  <form
-                    onSubmit={handleSendMessage}
-                    className="p-5 border-t border-slate-800 flex gap-3"
-                  >
-                    <input
-                      type="text"
-                      value={messageText}
-                      onChange={(e) =>
-                        setMessageText(e.target.value)
-                      }
-                      placeholder="Type a message..."
-                      className="flex-1 px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
-                    />
+                  {/* MESSAGE COMPOSER */}
 
-                    <button
-                      type="submit"
-                      className="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium"
-                    >
-                      Send
-                    </button>
-                  </form>
+                  <div className="border-t border-white/10 p-5">
+
+                    {/* PROJECT SELECT */}
+
+                    <div className="mb-3">
+
+                      <select
+                        value={selectedProject}
+                        onChange={(event) =>
+                          setSelectedProject(
+                            event.target.value
+                          )
+                        }
+                        className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-3 py-2.5 text-sm text-white outline-none focus:border-blue-500"
+                      >
+
+                        <option value="">
+                          General conversation
+                        </option>
+
+                        {availableProjects.map(
+                          (project) => (
+
+                            <option
+                              key={project._id}
+                              value={
+                                project._id
+                              }
+                            >
+                              {project.name}
+                            </option>
+
+                          )
+                        )}
+
+                      </select>
+
+                    </div>
+
+                    <div className="flex gap-3">
+
+                      <textarea
+                        value={messageText}
+                        onChange={(event) =>
+                          setMessageText(
+                            event.target.value
+                          )
+                        }
+                        onKeyDown={
+                          handleKeyDown
+                        }
+                        placeholder="Type your message..."
+                        rows={2}
+                        className="flex-1 resize-none rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-blue-500"
+                      />
+
+                      <button
+                        onClick={
+                          handleSendMessage
+                        }
+                        disabled={
+                          sending ||
+                          !messageText.trim()
+                        }
+                        className="self-end rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {sending
+                          ? "Sending..."
+                          : "Send"}
+                      </button>
+
+                    </div>
+
+                    <p className="mt-2 text-[11px] text-gray-600">
+                      Press Enter to send •
+                      Shift + Enter for a new
+                      line
+                    </p>
+
+                  </div>
+
                 </>
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-slate-500">
-                  Select a conversation
-                </div>
+
               )}
+
             </div>
+
           </div>
 
-          <p className="text-xs text-slate-600 mt-4">
-            Messaging is currently stored in temporary frontend state.
-          </p>
-        </section>
-      </div>
-    </main>
-  );
-}
+          {/* FOOTER */}
 
-function SidebarLink({
-  href,
-  label,
-  icon,
-  active = false,
-}: {
-  href: string;
-  label: string;
-  icon: string;
-  active?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition ${
-        active
-          ? "bg-blue-600 text-white"
-          : "text-slate-400 hover:bg-slate-800 hover:text-white"
-      }`}
-    >
-      <span>{icon}</span>
-      <span>{label}</span>
-    </Link>
+          <div className="mt-10 border-t border-white/10 py-6 text-center text-sm text-gray-600">
+            FreelancerPortal © 2026 — Freelancer
+            Invoice & Client Portal
+          </div>
+
+        </div>
+
+      </main>
+
+    </div>
   );
 }

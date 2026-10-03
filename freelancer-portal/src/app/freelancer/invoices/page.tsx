@@ -1,136 +1,245 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-interface Client {
+type Client = {
   _id: string;
   name: string;
   company: string;
-}
+  email: string;
+};
 
-interface Project {
+type Project = {
   _id: string;
   name: string;
+  description?: string;
   budget: number;
-}
+  deadline: string;
+  status: string;
+  client:
+    | string
+    | {
+        _id: string;
+        name: string;
+        company: string;
+      };
+};
 
-interface Invoice {
+type Invoice = {
   _id: string;
   invoiceNumber: string;
   amount: number;
   issueDate: string;
   dueDate: string;
-  status: string;
-  client: Client;
-  project: Project;
-}
+  status: "Draft" | "Pending" | "Paid" | "Overdue";
+  client:
+    | string
+    | {
+        _id: string;
+        name: string;
+        company: string;
+      };
+  project:
+    | string
+    | {
+        _id: string;
+        name: string;
+      };
+  createdAt: string;
+};
 
-export default function InvoicesPage() {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+export default function FreelancerInvoicesPage() {
+  const router = useRouter();
+
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
 
-  const [showForm, setShowForm] = useState(false);
+  const [selectedClient, setSelectedClient] = useState("");
+  const [selectedProject, setSelectedProject] = useState("");
 
-  const [clientId, setClientId] = useState("");
-  const [projectId, setProjectId] = useState("");
   const [amount, setAmount] = useState("");
   const [issueDate, setIssueDate] = useState("");
   const [dueDate, setDueDate] = useState("");
 
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
 
-  const getUser = () => {
-    if (typeof window === "undefined") return null;
+  const [showForm, setShowForm] = useState(false);
 
-    const user = localStorage.getItem("user");
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
 
-    if (!user) return null;
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
+  // --------------------------------------------------
+  // LOAD DATA
+  // --------------------------------------------------
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
     try {
-      return JSON.parse(user);
-    } catch {
-      return null;
-    }
-  };
+      setLoading(true);
+      setError("");
 
-  const loadData = async () => {
-    const user = getUser();
+      const [clientsResponse, projectsResponse, invoicesResponse] =
+        await Promise.all([
+          fetch("/api/clients", {
+            cache: "no-store",
+          }),
 
-    if (!user?.id) return;
+          fetch("/api/projects", {
+            cache: "no-store",
+          }),
 
-    try {
-      const [
-        clientsResponse,
-        projectsResponse,
-        invoicesResponse,
-      ] = await Promise.all([
-        fetch(`/api/clients?freelancerId=${user.id}`),
-        fetch(`/api/projects?freelancerId=${user.id}`),
-        fetch(`/api/invoices?freelancerId=${user.id}`),
-      ]);
+          fetch("/api/invoices", {
+            cache: "no-store",
+          }),
+        ]);
 
       const clientsData = await clientsResponse.json();
       const projectsData = await projectsResponse.json();
       const invoicesData = await invoicesResponse.json();
 
-      if (clientsData.success) {
-        setClients(clientsData.clients);
+      if (
+        clientsResponse.status === 401 ||
+        projectsResponse.status === 401 ||
+        invoicesResponse.status === 401
+      ) {
+        router.push("/login");
+        return;
       }
 
-      if (projectsData.success) {
-        setProjects(projectsData.projects);
+      if (!clientsResponse.ok) {
+        throw new Error(
+          clientsData.message || "Failed to load clients."
+        );
       }
 
-      if (invoicesData.success) {
-        setInvoices(invoicesData.invoices);
+      if (!projectsResponse.ok) {
+        throw new Error(
+          projectsData.message || "Failed to load projects."
+        );
       }
+
+      if (!invoicesResponse.ok) {
+        throw new Error(
+          invoicesData.message || "Failed to load invoices."
+        );
+      }
+
+      setClients(clientsData.clients || []);
+      setProjects(projectsData.projects || []);
+      setInvoices(invoicesData.invoices || []);
     } catch (error) {
-      console.error("Failed to load invoice data:", error);
+      console.error(error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load invoice data."
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  // --------------------------------------------------
+  // FILTER PROJECTS BY SELECTED CLIENT
+  // --------------------------------------------------
 
-  const generateInvoiceNumber = () => {
-    return `INV-${String(invoices.length + 1).padStart(3, "0")}`;
+  const availableProjects = useMemo(() => {
+    if (!selectedClient) {
+      return projects;
+    }
+
+    return projects.filter((project) => {
+      const clientId =
+        typeof project.client === "string"
+          ? project.client
+          : project.client?._id;
+
+      return clientId === selectedClient;
+    });
+  }, [projects, selectedClient]);
+
+  // --------------------------------------------------
+  // HANDLE CLIENT CHANGE
+  // --------------------------------------------------
+
+  const handleClientChange = (
+    event: React.ChangeEvent<HTMLSelectElement>
+  ) => {
+    const clientId = event.target.value;
+
+    setSelectedClient(clientId);
+
+    // Reset project when client changes
+    setSelectedProject("");
   };
 
+  // --------------------------------------------------
+  // CREATE INVOICE
+  // --------------------------------------------------
+
   const handleCreateInvoice = async (
-    e: React.FormEvent
+    event: React.FormEvent<HTMLFormElement>
   ) => {
-    e.preventDefault();
+    event.preventDefault();
 
-    setMessage("");
+    setError("");
+    setSuccess("");
 
-    const user = getUser();
+    if (!selectedClient) {
+      setError("Please select a client.");
+      return;
+    }
 
-    if (!user?.id) {
-      setMessage("Please login first.");
+    if (!selectedProject) {
+      setError("Please select a project.");
+      return;
+    }
+
+    if (!amount || Number(amount) <= 0) {
+      setError("Please enter a valid invoice amount.");
+      return;
+    }
+
+    if (!issueDate) {
+      setError("Please select an issue date.");
+      return;
+    }
+
+    if (!dueDate) {
+      setError("Please select a due date.");
+      return;
+    }
+
+    if (new Date(dueDate) < new Date(issueDate)) {
+      setError("Due date cannot be before the issue date.");
       return;
     }
 
     try {
-      setLoading(true);
+      setCreating(true);
 
       const response = await fetch("/api/invoices", {
         method: "POST",
+
         headers: {
           "Content-Type": "application/json",
         },
+
         body: JSON.stringify({
-          freelancerId: user.id,
-          clientId,
-          projectId,
-          invoiceNumber: generateInvoiceNumber(),
-          amount,
+          clientId: selectedClient,
+          projectId: selectedProject,
+          amount: Number(amount),
           issueDate,
           dueDate,
           status: "Pending",
@@ -139,37 +248,138 @@ export default function InvoicesPage() {
 
       const data = await response.json();
 
-      if (!response.ok) {
-        setMessage(data.message || "Failed to create invoice.");
+      if (response.status === 401) {
+        router.push("/login");
         return;
       }
 
-      setMessage("Invoice created successfully.");
+      if (!response.ok) {
+        setError(
+          data.message || "Failed to create invoice."
+        );
+        return;
+      }
 
-      setClientId("");
-      setProjectId("");
+      setSuccess(
+        `Invoice ${data.invoice?.invoiceNumber || ""} created successfully.`
+      );
+
+      // Reset form
+      setSelectedClient("");
+      setSelectedProject("");
       setAmount("");
       setIssueDate("");
       setDueDate("");
+
       setShowForm(false);
 
-      await loadData();
+      // Reload invoices
+      await fetchData();
     } catch (error) {
       console.error(error);
-      setMessage("Unable to connect to the server.");
+
+      setError("Unable to connect to the server.");
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   };
 
+  // --------------------------------------------------
+  // LOGOUT
+  // --------------------------------------------------
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error(error);
+    }
+
+    localStorage.removeItem("user");
+
+    router.push("/login");
+  };
+
+  // --------------------------------------------------
+  // FORMAT HELPERS
+  // --------------------------------------------------
+
+  const formatCurrency = (value: number) => {
+    return `₹${Number(value || 0).toLocaleString("en-IN")}`;
+  };
+
+  const formatDate = (date: string) => {
+    if (!date) return "-";
+
+    return new Date(date).toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const getClientName = (client: Invoice["client"]) => {
+    if (typeof client === "string") {
+      const foundClient = clients.find(
+        (item) => item._id === client
+      );
+
+      return foundClient?.company || foundClient?.name || "Unknown";
+    }
+
+    return client?.company || client?.name || "Unknown";
+  };
+
+  const getProjectName = (project: Invoice["project"]) => {
+    if (typeof project === "string") {
+      const foundProject = projects.find(
+        (item) => item._id === project
+      );
+
+      return foundProject?.name || "Unknown";
+    }
+
+    return project?.name || "Unknown";
+  };
+
+  const getStatusClass = (status: string) => {
+    switch (status) {
+      case "Paid":
+        return "bg-green-500/10 text-green-400";
+
+      case "Pending":
+        return "bg-yellow-500/10 text-yellow-400";
+
+      case "Overdue":
+        return "bg-red-500/10 text-red-400";
+
+      case "Draft":
+        return "bg-gray-500/10 text-gray-400";
+
+      default:
+        return "bg-gray-500/10 text-gray-400";
+    }
+  };
+
+  // --------------------------------------------------
+  // FILTER INVOICES
+  // --------------------------------------------------
+
   const filteredInvoices = invoices.filter((invoice) => {
-    const text = search.toLowerCase();
+    const searchText = search.toLowerCase();
 
     const matchesSearch =
-      invoice.invoiceNumber.toLowerCase().includes(text) ||
-      invoice.client?.name?.toLowerCase().includes(text) ||
-      invoice.client?.company?.toLowerCase().includes(text) ||
-      invoice.project?.name?.toLowerCase().includes(text);
+      invoice.invoiceNumber
+        .toLowerCase()
+        .includes(searchText) ||
+      getClientName(invoice.client)
+        .toLowerCase()
+        .includes(searchText) ||
+      getProjectName(invoice.project)
+        .toLowerCase()
+        .includes(searchText);
 
     const matchesStatus =
       statusFilter === "All" ||
@@ -178,303 +388,464 @@ export default function InvoicesPage() {
     return matchesSearch && matchesStatus;
   });
 
+  // --------------------------------------------------
+  // SUMMARY
+  // --------------------------------------------------
+
   const totalAmount = invoices.reduce(
-    (sum, invoice) => sum + invoice.amount,
+    (total, invoice) => total + Number(invoice.amount || 0),
     0
   );
 
   const pendingAmount = invoices
-    .filter((invoice) => invoice.status === "Pending")
-    .reduce((sum, invoice) => sum + invoice.amount, 0);
+    .filter(
+      (invoice) =>
+        invoice.status === "Pending" ||
+        invoice.status === "Overdue"
+    )
+    .reduce(
+      (total, invoice) =>
+        total + Number(invoice.amount || 0),
+      0
+    );
 
   const paidAmount = invoices
     .filter((invoice) => invoice.status === "Paid")
-    .reduce((sum, invoice) => sum + invoice.amount, 0);
+    .reduce(
+      (total, invoice) =>
+        total + Number(invoice.amount || 0),
+      0
+    );
+
+  // --------------------------------------------------
+  // PAGE
+  // --------------------------------------------------
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <div className="min-h-screen bg-[#0b0f19] text-white">
 
-      {/* Navbar */}
-      <nav className="border-b border-slate-800 bg-slate-900">
-        <div className="flex items-center justify-between px-6 py-4">
+      {/* NAVBAR */}
 
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold text-blue-400"
-          >
-            FreelancerPortal
-          </Link>
+      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
+
+        <div className="flex h-16 items-center justify-between px-6">
 
           <Link
             href="/freelancer/dashboard"
-            className="text-sm text-slate-400 hover:text-white"
+            className="text-xl font-bold"
           >
-            Dashboard
+            Freelancer<span className="text-blue-500">Portal</span>
           </Link>
 
-        </div>
-      </nav>
+          <div className="flex items-center gap-5">
 
-      <div className="flex">
-
-        {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-73px)] border-r border-slate-800 bg-slate-900 p-5">
-
-          <div className="space-y-2">
-
-            <Link
-              href="/freelancer/dashboard"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/freelancer/clients"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Clients
-            </Link>
-
-            <Link
-              href="/freelancer/projects"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Projects
-            </Link>
-
-            <Link
-              href="/freelancer/invoices"
-              className="block px-4 py-3 rounded-lg bg-blue-600"
-            >
-              Invoices
-            </Link>
-
-            <Link
-              href="/freelancer/payments"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Payments
-            </Link>
-
-            <Link
-              href="/freelancer/files"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Files
-            </Link>
-
-            <Link
-              href="/freelancer/messages"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Messages
-            </Link>
-
-            <Link
-              href="/freelancer/reports"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Reports
-            </Link>
-
-          </div>
-        </aside>
-
-        {/* Main */}
-        <section className="flex-1 p-8">
-
-          {/* Heading */}
-          <div className="flex items-center justify-between mb-8">
-
-            <div>
-              <h1 className="text-3xl font-bold">
-                Invoices
-              </h1>
-
-              <p className="text-slate-400 mt-1">
-                Create and manage client invoices
-              </p>
-            </div>
+            <span className="text-sm text-gray-300">
+              Freelancer
+            </span>
 
             <button
-              onClick={() => setShowForm(!showForm)}
-              className="px-5 py-3 rounded-lg bg-blue-600 hover:bg-blue-500 font-semibold"
+              onClick={handleLogout}
+              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
             >
-              + Create Invoice
+              Logout
             </button>
 
           </div>
 
-          {/* Message */}
-          {message && (
-            <div className="mb-6 p-4 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-300">
-              {message}
+        </div>
+
+      </header>
+
+      {/* SIDEBAR */}
+
+      <aside className="fixed bottom-0 left-0 top-16 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
+
+        <nav className="space-y-2 p-4">
+
+          <Link
+            href="/freelancer/dashboard"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Dashboard
+          </Link>
+
+          <Link
+            href="/freelancer/clients"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Clients
+          </Link>
+
+          <Link
+            href="/freelancer/projects"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Projects
+          </Link>
+
+          <Link
+            href="/freelancer/invoices"
+            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
+          >
+            Invoices
+          </Link>
+
+          <Link
+            href="/freelancer/payments"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Payments
+          </Link>
+
+          <Link
+            href="/freelancer/files"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Files
+          </Link>
+
+          <Link
+            href="/freelancer/messages"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Messages
+          </Link>
+
+          <Link
+            href="/freelancer/reports"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Reports
+          </Link>
+
+        </nav>
+
+      </aside>
+
+      {/* MAIN */}
+
+      <main className="pt-16 md:ml-64">
+
+        <div className="p-6 md:p-8">
+
+          {/* HEADER */}
+
+          <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
+
+            <div>
+
+              <h1 className="text-3xl font-bold">
+                Invoices
+              </h1>
+
+              <p className="mt-2 text-gray-400">
+                Create and manage invoices for your clients.
+              </p>
+
+            </div>
+
+            <button
+              onClick={() => {
+                setError("");
+                setSuccess("");
+                setShowForm(!showForm);
+              }}
+              className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium transition hover:bg-blue-500"
+            >
+              {showForm ? "Close Form" : "+ Create Invoice"}
+            </button>
+
+          </div>
+
+          {/* SUCCESS */}
+
+          {success && (
+            <div className="mb-6 rounded-lg border border-green-500/20 bg-green-500/10 p-4 text-green-400">
+              {success}
             </div>
           )}
 
-          {/* Summary */}
-          <div className="grid md:grid-cols-3 gap-5 mb-8">
+          {/* ERROR */}
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <p className="text-slate-400">
+          {error && (
+            <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-red-400">
+              {error}
+            </div>
+          )}
+
+          {/* CREATE FORM */}
+
+          {showForm && (
+
+            <div className="mb-8 rounded-xl border border-white/10 bg-[#111827] p-6">
+
+              <div className="mb-6">
+
+                <h2 className="text-xl font-semibold">
+                  Create New Invoice
+                </h2>
+
+                <p className="mt-1 text-sm text-gray-500">
+                  Invoice number will be generated automatically.
+                </p>
+
+              </div>
+
+              <form
+                onSubmit={handleCreateInvoice}
+                className="grid gap-5 md:grid-cols-2"
+              >
+
+                {/* CLIENT */}
+
+                <div>
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    Client
+                  </label>
+
+                  <select
+                    value={selectedClient}
+                    onChange={handleClientChange}
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
+                  >
+
+                    <option value="">
+                      Select Client
+                    </option>
+
+                    {clients.map((client) => (
+
+                      <option
+                        key={client._id}
+                        value={client._id}
+                      >
+                        {client.company} — {client.name}
+                      </option>
+
+                    ))}
+
+                  </select>
+
+                </div>
+
+                {/* PROJECT */}
+
+                <div>
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    Project
+                  </label>
+
+                  <select
+                    value={selectedProject}
+                    onChange={(e) =>
+                      setSelectedProject(e.target.value)
+                    }
+                    disabled={!selectedClient}
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-50 focus:border-blue-500"
+                  >
+
+                    <option value="">
+                      {selectedClient
+                        ? "Select Project"
+                        : "Select a client first"}
+                    </option>
+
+                    {availableProjects.map((project) => (
+
+                      <option
+                        key={project._id}
+                        value={project._id}
+                      >
+                        {project.name}
+                      </option>
+
+                    ))}
+
+                  </select>
+
+                </div>
+
+                {/* AMOUNT */}
+
+                <div>
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    Amount (₹)
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={amount}
+                    onChange={(e) =>
+                      setAmount(e.target.value)
+                    }
+                    placeholder="50000"
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none placeholder:text-gray-600 focus:border-blue-500"
+                  />
+
+                </div>
+
+                {/* ISSUE DATE */}
+
+                <div>
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    Issue Date
+                  </label>
+
+                  <input
+                    type="date"
+                    value={issueDate}
+                    onChange={(e) =>
+                      setIssueDate(e.target.value)
+                    }
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
+                  />
+
+                </div>
+
+                {/* DUE DATE */}
+
+                <div>
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    Due Date
+                  </label>
+
+                  <input
+                    type="date"
+                    value={dueDate}
+                    onChange={(e) =>
+                      setDueDate(e.target.value)
+                    }
+                    className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
+                  />
+
+                </div>
+
+                {/* AUTOMATIC NUMBER */}
+
+                <div>
+
+                  <label className="mb-2 block text-sm text-gray-400">
+                    Invoice Number
+                  </label>
+
+                  <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-gray-400">
+                    Automatically generated
+                  </div>
+
+                </div>
+
+                {/* BUTTONS */}
+
+                <div className="flex items-end gap-3 md:col-span-2">
+
+                  <button
+                    type="submit"
+                    disabled={creating}
+                    className="rounded-lg bg-blue-600 px-6 py-3 text-sm font-medium transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {creating
+                      ? "Creating..."
+                      : "Create Invoice"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForm(false);
+                      setError("");
+                    }}
+                    className="rounded-lg border border-white/10 px-6 py-3 text-sm text-gray-300 transition hover:bg-white/5"
+                  >
+                    Cancel
+                  </button>
+
+                </div>
+
+              </form>
+
+            </div>
+
+          )}
+
+          {/* SUMMARY CARDS */}
+
+          <div className="mb-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+
+              <p className="text-sm text-gray-400">
                 Total Invoices
               </p>
 
-              <p className="text-3xl font-bold mt-2">
-                {invoices.length}
+              <p className="mt-3 text-3xl font-bold">
+                {loading ? "..." : invoices.length}
               </p>
+
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <p className="text-slate-400">
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+
+              <p className="text-sm text-gray-400">
                 Total Amount
               </p>
 
-              <p className="text-3xl font-bold mt-2">
-                ₹{totalAmount.toLocaleString()}
+              <p className="mt-3 text-3xl font-bold">
+                {loading
+                  ? "..."
+                  : formatCurrency(totalAmount)}
               </p>
+
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <p className="text-slate-400">
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+
+              <p className="text-sm text-gray-400">
                 Pending Amount
               </p>
 
-              <p className="text-3xl font-bold mt-2 text-yellow-400">
-                ₹{pendingAmount.toLocaleString()}
+              <p className="mt-3 text-3xl font-bold text-yellow-400">
+                {loading
+                  ? "..."
+                  : formatCurrency(pendingAmount)}
               </p>
+
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+
+              <p className="text-sm text-gray-400">
+                Paid Amount
+              </p>
+
+              <p className="mt-3 text-3xl font-bold text-green-400">
+                {loading
+                  ? "..."
+                  : formatCurrency(paidAmount)}
+              </p>
+
             </div>
 
           </div>
 
-          {/* Create Invoice Form */}
-          {showForm && (
-            <form
-              onSubmit={handleCreateInvoice}
-              className="mb-8 bg-slate-900 border border-slate-800 rounded-xl p-6"
-            >
+          {/* SEARCH + FILTER */}
 
-              <h2 className="text-xl font-semibold mb-5">
-                Create New Invoice
-              </h2>
-
-              <div className="grid md:grid-cols-2 gap-4">
-
-                <select
-                  value={clientId}
-                  onChange={(e) =>
-                    setClientId(e.target.value)
-                  }
-                  required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
-                >
-                  <option value="">
-                    Select Client
-                  </option>
-
-                  {clients.map((client) => (
-                    <option
-                      key={client._id}
-                      value={client._id}
-                    >
-                      {client.name} - {client.company}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  value={projectId}
-                  onChange={(e) =>
-                    setProjectId(e.target.value)
-                  }
-                  required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
-                >
-                  <option value="">
-                    Select Project
-                  </option>
-
-                  {projects.map((project) => (
-                    <option
-                      key={project._id}
-                      value={project._id}
-                    >
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-
-                <input
-                  type="number"
-                  placeholder="Amount"
-                  value={amount}
-                  onChange={(e) =>
-                    setAmount(e.target.value)
-                  }
-                  required
-                  min="0"
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
-                />
-
-                <input
-                  type="date"
-                  value={issueDate}
-                  onChange={(e) =>
-                    setIssueDate(e.target.value)
-                  }
-                  required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
-                />
-
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={(e) =>
-                    setDueDate(e.target.value)
-                  }
-                  required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
-                />
-
-              </div>
-
-              <div className="flex gap-3 mt-5">
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 font-semibold"
-                >
-                  {loading
-                    ? "Creating..."
-                    : "Create Invoice"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  className="px-5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700"
-                >
-                  Cancel
-                </button>
-
-              </div>
-
-            </form>
-          )}
-
-          {/* Search + Filter */}
-          <div className="flex flex-wrap gap-4 mb-6">
+          <div className="mb-5 flex flex-col gap-4 md:flex-row">
 
             <input
               type="text"
-              placeholder="Search invoices..."
               value={search}
               onChange={(e) =>
                 setSearch(e.target.value)
               }
-              className="flex-1 min-w-[250px] px-4 py-3 rounded-lg bg-slate-900 border border-slate-800 outline-none focus:border-blue-500"
+              placeholder="Search invoice, client or project..."
+              className="flex-1 rounded-lg border border-white/10 bg-[#111827] px-4 py-3 text-white outline-none placeholder:text-gray-600 focus:border-blue-500"
             />
 
             <select
@@ -482,111 +853,174 @@ export default function InvoicesPage() {
               onChange={(e) =>
                 setStatusFilter(e.target.value)
               }
-              className="px-4 py-3 rounded-lg bg-slate-900 border border-slate-800 outline-none"
+              className="rounded-lg border border-white/10 bg-[#111827] px-4 py-3 text-white outline-none focus:border-blue-500"
             >
-              <option>All</option>
-              <option>Draft</option>
-              <option>Pending</option>
-              <option>Paid</option>
-              <option>Overdue</option>
+
+              <option value="All">
+                All Statuses
+              </option>
+
+              <option value="Draft">
+                Draft
+              </option>
+
+              <option value="Pending">
+                Pending
+              </option>
+
+              <option value="Paid">
+                Paid
+              </option>
+
+              <option value="Overdue">
+                Overdue
+              </option>
+
             </select>
+
+            <button
+              onClick={fetchData}
+              className="rounded-lg border border-white/10 bg-[#111827] px-5 py-3 text-sm text-gray-300 transition hover:bg-white/5"
+            >
+              ↻ Refresh
+            </button>
 
           </div>
 
-          {/* Invoice Table */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          {/* INVOICE TABLE */}
 
-            <div className="overflow-x-auto">
+          <div className="overflow-hidden rounded-xl border border-white/10 bg-[#111827]">
 
-              <table className="w-full">
+            <div className="border-b border-white/10 p-5">
 
-                <thead className="bg-slate-800">
+              <h2 className="text-lg font-semibold">
+                All Invoices
+              </h2>
 
-                  <tr>
+              <p className="mt-1 text-sm text-gray-500">
+                {filteredInvoices.length} invoice
+                {filteredInvoices.length !== 1 ? "s" : ""}
+              </p>
 
-                    <th className="text-left px-6 py-4">
-                      Invoice
-                    </th>
+            </div>
 
-                    <th className="text-left px-6 py-4">
-                      Client
-                    </th>
+            {loading ? (
 
-                    <th className="text-left px-6 py-4">
-                      Project
-                    </th>
+              <div className="p-8 text-center text-gray-500">
+                Loading invoices...
+              </div>
 
-                    <th className="text-left px-6 py-4">
-                      Amount
-                    </th>
+            ) : filteredInvoices.length === 0 ? (
 
-                    <th className="text-left px-6 py-4">
-                      Due Date
-                    </th>
+              <div className="p-10 text-center">
 
-                    <th className="text-left px-6 py-4">
-                      Status
-                    </th>
+                <div className="text-4xl">
+                  🧾
+                </div>
 
-                  </tr>
+                <h3 className="mt-4 font-semibold">
+                  No invoices found
+                </h3>
 
-                </thead>
+                <p className="mt-2 text-sm text-gray-500">
+                  Create your first invoice to see it here.
+                </p>
 
-                <tbody>
+              </div>
 
-                  {filteredInvoices.length === 0 ? (
+            ) : (
 
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="text-center px-6 py-12 text-slate-400"
-                      >
-                        No invoices found.
-                      </td>
+              <div className="overflow-x-auto">
+
+                <table className="w-full">
+
+                  <thead>
+
+                    <tr className="border-b border-white/10 text-left text-xs uppercase text-gray-500">
+
+                      <th className="px-5 py-4">
+                        Invoice
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Client
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Project
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Amount
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Issue Date
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Due Date
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Status
+                      </th>
+
                     </tr>
 
-                  ) : (
+                  </thead>
 
-                    filteredInvoices.map((invoice) => (
+                  <tbody>
+
+                    {filteredInvoices.map((invoice) => (
 
                       <tr
                         key={invoice._id}
-                        className="border-t border-slate-800 hover:bg-slate-800/50"
+                        className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]"
                       >
 
-                        <td className="px-6 py-4 font-medium">
-                          {invoice.invoiceNumber}
+                        <td className="px-5 py-4">
+
+                          <p className="font-semibold">
+                            {invoice.invoiceNumber}
+                          </p>
+
                         </td>
 
-                        <td className="px-6 py-4">
-                          {invoice.client?.company ||
-                            invoice.client?.name}
+                        <td className="px-5 py-4">
+
+                          <p className="text-sm text-gray-300">
+                            {getClientName(invoice.client)}
+                          </p>
+
                         </td>
 
-                        <td className="px-6 py-4 text-slate-300">
-                          {invoice.project?.name}
+                        <td className="px-5 py-4">
+
+                          <p className="text-sm text-gray-400">
+                            {getProjectName(invoice.project)}
+                          </p>
+
                         </td>
 
-                        <td className="px-6 py-4 font-semibold">
-                          ₹{invoice.amount.toLocaleString()}
+                        <td className="px-5 py-4 font-medium">
+                          {formatCurrency(invoice.amount)}
                         </td>
 
-                        <td className="px-6 py-4 text-slate-300">
-                          {new Date(
-                            invoice.dueDate
-                          ).toLocaleDateString("en-IN")}
+                        <td className="px-5 py-4 text-sm text-gray-400">
+                          {formatDate(invoice.issueDate)}
                         </td>
 
-                        <td className="px-6 py-4">
+                        <td className="px-5 py-4 text-sm text-gray-400">
+                          {formatDate(invoice.dueDate)}
+                        </td>
+
+                        <td className="px-5 py-4">
 
                           <span
-                            className={`px-3 py-1 rounded-full text-xs ${
-                              invoice.status === "Paid"
-                                ? "bg-green-500/10 text-green-400"
-                                : invoice.status === "Overdue"
-                                ? "bg-red-500/10 text-red-400"
-                                : "bg-yellow-500/10 text-yellow-400"
-                            }`}
+                            className={`rounded-full px-3 py-1 text-xs ${getStatusClass(
+                              invoice.status
+                            )}`}
                           >
                             {invoice.status}
                           </span>
@@ -595,22 +1029,28 @@ export default function InvoicesPage() {
 
                       </tr>
 
-                    ))
+                    ))}
 
-                  )}
+                  </tbody>
 
-                </tbody>
+                </table>
 
-              </table>
+              </div>
 
-            </div>
+            )}
 
           </div>
 
-        </section>
+          {/* FOOTER */}
 
-      </div>
+          <div className="mt-8 border-t border-white/10 py-6 text-center text-sm text-gray-600">
+            FreelancerPortal © 2026 — Freelancer Invoice & Client Portal
+          </div>
 
-    </main>
+        </div>
+
+      </main>
+
+    </div>
   );
 }

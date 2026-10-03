@@ -49,9 +49,7 @@ export default function ClientsPage() {
     }
 
     try {
-      const response = await fetch(
-        `/api/clients?freelancerId=${user.id}`
-      );
+      const response = await fetch("/api/clients");
 
       const data = await response.json();
 
@@ -100,7 +98,6 @@ export default function ClientsPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          freelancerId: user.id,
           name,
           company,
           email,

@@ -60,7 +60,7 @@ export default function ProjectsPage() {
       const [clientsResponse, projectsResponse] =
         await Promise.all([
           fetch(`/api/clients?freelancerId=${user.id}`),
-          fetch(`/api/projects?freelancerId=${user.id}`),
+          fetch("/api/projects"),
         ]);
 
       const clientsData = await clientsResponse.json();
@@ -105,7 +105,6 @@ export default function ProjectsPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          freelancerId: user.id,
           clientId,
           name,
           description,

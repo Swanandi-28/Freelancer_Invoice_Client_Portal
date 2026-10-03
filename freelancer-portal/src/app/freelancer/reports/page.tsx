@@ -1,394 +1,656 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-const monthlyData = [
-  { month: "Apr", revenue: 35000, invoices: 4 },
-  { month: "May", revenue: 48000, invoices: 5 },
-  { month: "Jun", revenue: 42000, invoices: 4 },
-  { month: "Jul", revenue: 62000, invoices: 7 },
-  { month: "Aug", revenue: 58000, invoices: 6 },
-  { month: "Sep", revenue: 75000, invoices: 8 },
-];
+type ReportData = {
+  summary: {
+    totalClients: number;
+    totalProjects: number;
+    activeProjects: number;
+    completedProjects: number;
+    totalInvoicedAmount: number;
+    paidInvoiceAmount: number;
+    pendingAmount: number;
+    totalRevenue: number;
+    pendingPaymentAmount: number;
+  };
 
-const projectData = [
-  {
-    project: "E-commerce Website",
-    client: "ABC Company",
-    budget: "₹50,000",
-    received: "₹50,000",
-    status: "Completed",
-  },
-  {
-    project: "Brand Identity Design",
-    client: "XYZ Solutions",
-    budget: "₹25,000",
-    received: "₹15,000",
-    status: "In Progress",
-  },
-  {
-    project: "Mobile App UI",
-    client: "Tech Startup",
-    budget: "₹32,000",
-    received: "₹20,000",
-    status: "In Progress",
-  },
-];
+  monthlyRevenue: {
+    month: string;
+    revenue: number;
+  }[];
+
+  projectPerformance: {
+    id: string;
+    name: string;
+    budget: number;
+    status: string;
+    client: string;
+  }[];
+
+  invoiceBreakdown: {
+    Draft: number;
+    Pending: number;
+    Paid: number;
+    Overdue: number;
+  };
+
+  paymentMethods: {
+    method: string;
+    amount: number;
+  }[];
+};
+
+const formatCurrency = (amount: number) => {
+  return `₹${amount.toLocaleString("en-IN")}`;
+};
 
 export default function ReportsPage() {
-  const totalRevenue = monthlyData.reduce(
-    (total, item) => total + item.revenue,
-    0
-  );
+  const [data, setData] = useState<ReportData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const totalInvoices = monthlyData.reduce(
-    (total, item) => total + item.invoices,
-    0
-  );
+  useEffect(() => {
+    const loadReports = async () => {
+      try {
+        setLoading(true);
+        setError("");
 
-  const maxRevenue = Math.max(
-    ...monthlyData.map((item) => item.revenue)
-  );
+        const response = await fetch("/api/reports/freelancer", {
+          method: "GET",
+          credentials: "include",
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          setError(result.message || "Failed to load reports.");
+          return;
+        }
+
+        setData(result);
+      } catch (error) {
+        console.error(error);
+        setError("Unable to connect to the server.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadReports();
+  }, []);
+
+  const maxRevenue = useMemo(() => {
+    if (!data || data.monthlyRevenue.length === 0) {
+      return 1;
+    }
+
+    return Math.max(
+      ...data.monthlyRevenue.map((item) => item.revenue),
+      1
+    );
+  }, [data]);
+
+  const totalInvoiceStatuses = useMemo(() => {
+    if (!data) return 0;
+
+    return Object.values(data.invoiceBreakdown).reduce(
+      (total, value) => total + value,
+      0
+    );
+  }, [data]);
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+    } finally {
+      window.location.href = "/login";
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-gray-400">Loading reports...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-[#111113] border border-white/10 rounded-2xl p-8 text-center">
+          <div className="text-4xl mb-4">⚠️</div>
+
+          <h1 className="text-xl font-semibold mb-2">
+            Unable to load reports
+          </h1>
+
+          <p className="text-gray-400 mb-6">
+            {error || "No report data available."}
+          </p>
+
+          <button
+            onClick={() => window.location.reload()}
+            className="px-5 py-3 bg-white text-black rounded-xl font-medium hover:bg-gray-200"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      {/* Top Navbar */}
-      <nav className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-6">
-        <Link href="/" className="text-xl font-bold">
-          Freelancer<span className="text-blue-500">Portal</span>
-        </Link>
+    <div className="min-h-screen bg-[#09090b] text-white">
+      {/* TOP NAVBAR */}
+      <header className="fixed top-0 left-0 right-0 h-16 bg-[#0d0d0f]/95 backdrop-blur border-b border-white/10 z-50">
+        <div className="h-full px-6 flex items-center justify-between">
+          <Link
+            href="/freelancer/dashboard"
+            className="text-xl font-bold tracking-tight"
+          >
+            Freelancer<span className="text-gray-400">Portal</span>
+          </Link>
 
-        <div className="flex items-center gap-5">
-          <span className="text-sm text-slate-400">
-            Welcome, Freelancer
-          </span>
+          <div className="flex items-center gap-4">
+            <span className="hidden sm:block text-sm text-gray-400">
+              Reports
+            </span>
+
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2 text-sm rounded-lg border border-white/10 hover:bg-white/5 transition"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* SIDEBAR */}
+      <aside className="fixed top-16 left-0 bottom-0 w-64 bg-[#0d0d0f] border-r border-white/10 hidden md:block">
+        <nav className="p-4 space-y-1">
+          <Link
+            href="/freelancer/dashboard"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+          >
+            📊 Dashboard
+          </Link>
 
           <Link
-            href="/login"
-            className="text-sm text-slate-400 hover:text-white"
+            href="/freelancer/clients"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
           >
-            Logout
+            👥 Clients
           </Link>
-        </div>
-      </nav>
 
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 p-5">
+          <Link
+            href="/freelancer/projects"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+          >
+            📁 Projects
+          </Link>
+
+          <Link
+            href="/freelancer/invoices"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+          >
+            🧾 Invoices
+          </Link>
+
+          <Link
+            href="/freelancer/payments"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+          >
+            💳 Payments
+          </Link>
+
+          <Link
+            href="/freelancer/files"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+          >
+            📎 Files
+          </Link>
+
+          <Link
+            href="/freelancer/messages"
+            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+          >
+            💬 Messages
+          </Link>
+
+          <Link
+            href="/freelancer/reports"
+            className="block px-4 py-3 rounded-lg bg-white/10 text-white"
+          >
+            📈 Reports
+          </Link>
+        </nav>
+      </aside>
+
+      {/* MAIN CONTENT */}
+      <main className="md:ml-64 pt-16 min-h-screen">
+        <div className="p-6 md:p-8 max-w-7xl mx-auto">
+          {/* HEADER */}
           <div className="mb-8">
-            <p className="text-xs uppercase tracking-wider text-slate-500">
-              Freelancer
+            <p className="text-sm text-gray-500 mb-2">
+              Freelancer Analytics
             </p>
 
-            <h2 className="text-lg font-semibold mt-1">
-              Dashboard
-            </h2>
+            <h1 className="text-3xl md:text-4xl font-bold">
+              Reports & Analytics
+            </h1>
+
+            <p className="text-gray-400 mt-2">
+              View your business performance using real-time data.
+            </p>
           </div>
 
-          <nav className="space-y-2">
-            <SidebarLink
-              href="/freelancer/dashboard"
-              label="Dashboard"
-              icon="📊"
-            />
+          {/* SUMMARY CARDS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            {/* Revenue */}
+            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+              <div className="text-2xl mb-3">💰</div>
 
-            <SidebarLink
-              href="/freelancer/clients"
-              label="Clients"
-              icon="👥"
-            />
+              <p className="text-sm text-gray-500">
+                Total Revenue
+              </p>
 
-            <SidebarLink
-              href="/freelancer/projects"
-              label="Projects"
-              icon="📁"
-            />
+              <p className="text-2xl font-bold mt-1">
+                {formatCurrency(data.summary.totalRevenue)}
+              </p>
 
-            <SidebarLink
-              href="/freelancer/invoices"
-              label="Invoices"
-              icon="🧾"
-            />
-
-            <SidebarLink
-              href="/freelancer/payments"
-              label="Payments"
-              icon="💳"
-            />
-
-            <SidebarLink
-              href="/freelancer/files"
-              label="Files"
-              icon="📎"
-            />
-
-            <SidebarLink
-              href="/freelancer/messages"
-              label="Messages"
-              icon="💬"
-            />
-
-            <SidebarLink
-              href="/freelancer/reports"
-              label="Reports"
-              icon="📈"
-              active
-            />
-          </nav>
-        </aside>
-
-        {/* Main Content */}
-        <section className="flex-1 p-8">
-          {/* Header */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-3xl font-bold">
-                Reports
-              </h1>
-
-              <p className="text-slate-400 mt-2">
-                View your freelance business performance.
+              <p className="text-xs text-green-400 mt-2">
+                From completed payments
               </p>
             </div>
 
-            <select className="px-4 py-3 rounded-lg bg-slate-900 border border-slate-800 focus:outline-none focus:border-blue-500">
-              <option>Last 6 Months</option>
-              <option>This Year</option>
-              <option>Last Year</option>
-            </select>
+            {/* Invoiced */}
+            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+              <div className="text-2xl mb-3">🧾</div>
+
+              <p className="text-sm text-gray-500">
+                Total Invoiced
+              </p>
+
+              <p className="text-2xl font-bold mt-1">
+                {formatCurrency(
+                  data.summary.totalInvoicedAmount
+                )}
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                Across all invoices
+              </p>
+            </div>
+
+            {/* Pending */}
+            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+              <div className="text-2xl mb-3">⏳</div>
+
+              <p className="text-sm text-gray-500">
+                Pending Amount
+              </p>
+
+              <p className="text-2xl font-bold mt-1">
+                {formatCurrency(
+                  data.summary.pendingAmount
+                )}
+              </p>
+
+              <p className="text-xs text-yellow-400 mt-2">
+                Pending + overdue invoices
+              </p>
+            </div>
+
+            {/* Projects */}
+            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+              <div className="text-2xl mb-3">📁</div>
+
+              <p className="text-sm text-gray-500">
+                Total Projects
+              </p>
+
+              <p className="text-2xl font-bold mt-1">
+                {data.summary.totalProjects}
+              </p>
+
+              <p className="text-xs text-gray-500 mt-2">
+                {data.summary.activeProjects} active ·{" "}
+                {data.summary.completedProjects} completed
+              </p>
+            </div>
           </div>
 
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-            <ReportCard
-              title="Total Revenue"
-              value={`₹${totalRevenue.toLocaleString("en-IN")}`}
-              description="Last 6 months"
-              icon="💰"
-            />
-
-            <ReportCard
-              title="Total Invoices"
-              value={totalInvoices.toString()}
-              description="Invoices created"
-              icon="🧾"
-            />
-
-            <ReportCard
-              title="Average Invoice"
-              value={`₹${Math.round(
-                totalRevenue / totalInvoices
-              ).toLocaleString("en-IN")}`}
-              description="Average invoice value"
-              icon="📊"
-            />
-          </div>
-
-          {/* Revenue Chart */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8">
-            <div className="flex items-center justify-between mb-8">
+          {/* REVENUE CHART */}
+          <section className="bg-[#111113] border border-white/10 rounded-2xl p-6 mb-8">
+            <div className="flex items-center justify-between mb-6">
               <div>
-                <h2 className="text-xl font-semibold">
+                <h2 className="text-lg font-semibold">
                   Revenue Overview
                 </h2>
 
-                <p className="text-sm text-slate-500 mt-1">
-                  Monthly revenue for the last 6 months
+                <p className="text-sm text-gray-500 mt-1">
+                  Revenue from completed payments
                 </p>
               </div>
 
-              <span className="text-sm text-green-400">
-                Revenue Trend
+              <span className="text-sm text-gray-400">
+                Last 6 months
               </span>
             </div>
 
-            <div className="h-72 flex items-end gap-4 md:gap-8 border-b border-slate-800 px-2">
-              {monthlyData.map((item) => {
-                const height =
-                  (item.revenue / maxRevenue) * 100;
+            {data.monthlyRevenue.length === 0 ? (
+              <div className="h-64 flex items-center justify-center text-gray-500">
+                No payment data available yet.
+              </div>
+            ) : (
+              <div className="h-64 flex items-end gap-4 md:gap-8 border-b border-white/10 px-2">
+                {data.monthlyRevenue.map((item) => {
+                  const height =
+                    Math.max(
+                      (item.revenue / maxRevenue) * 100,
+                      5
+                    );
 
-                return (
-                  <div
-                    key={item.month}
-                    className="flex-1 h-full flex flex-col justify-end items-center gap-3"
-                  >
-                    <span className="text-xs text-slate-400">
-                      ₹
-                      {(
-                        item.revenue / 1000
-                      ).toFixed(0)}
-                      k
-                    </span>
-
+                  return (
                     <div
-                      className="w-full max-w-14 bg-blue-600 rounded-t-lg hover:bg-blue-500 transition"
-                      style={{
-                        height: `${height}%`,
-                      }}
-                    />
+                      key={item.month}
+                      className="flex-1 h-full flex flex-col justify-end items-center gap-3"
+                    >
+                      <span className="text-xs text-gray-400">
+                        {formatCurrency(item.revenue)}
+                      </span>
 
-                    <span className="text-xs text-slate-500">
-                      {item.month}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                      <div
+                        className="w-full max-w-16 bg-white/20 hover:bg-white/30 rounded-t-lg transition-all"
+                        style={{
+                          height: `${height}%`,
+                        }}
+                        title={`${item.month}: ${formatCurrency(
+                          item.revenue
+                        )}`}
+                      />
+
+                      <span className="text-xs text-gray-500">
+                        {item.month}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* TWO COLUMN SECTION */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            {/* INVOICE BREAKDOWN */}
+            <section className="bg-[#111113] border border-white/10 rounded-2xl p-6">
+              <div className="mb-6">
+                <h2 className="text-lg font-semibold">
+                  Invoice Breakdown
+                </h2>
+
+                <p className="text-sm text-gray-500 mt-1">
+                  Current invoice statuses
+                </p>
+              </div>
+
+              {totalInvoiceStatuses === 0 ? (
+                <div className="py-12 text-center text-gray-500">
+                  No invoices available.
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {[
+                    {
+                      label: "Paid",
+                      value: data.invoiceBreakdown.Paid,
+                    },
+                    {
+                      label: "Pending",
+                      value: data.invoiceBreakdown.Pending,
+                    },
+                    {
+                      label: "Overdue",
+                      value: data.invoiceBreakdown.Overdue,
+                    },
+                    {
+                      label: "Draft",
+                      value: data.invoiceBreakdown.Draft,
+                    },
+                  ].map((item) => {
+                    const percentage =
+                      (item.value / totalInvoiceStatuses) * 100;
+
+                    return (
+                      <div key={item.label}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-300">
+                            {item.label}
+                          </span>
+
+                          <span className="text-sm text-gray-500">
+                            {item.value} (
+                            {percentage.toFixed(0)}%)
+                          </span>
+                        </div>
+
+                        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-white/50 rounded-full"
+                            style={{
+                              width: `${percentage}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            {/* PAYMENT METHODS */}
+            <section className="bg-[#111113] border border-white/10 rounded-2xl p-6">
+              <div className="mb-6">
+                <h2 className="text-lg font-semibold">
+                  Payment Methods
+                </h2>
+
+                <p className="text-sm text-gray-500 mt-1">
+                  Completed payment distribution
+                </p>
+              </div>
+
+              {data.paymentMethods.length === 0 ? (
+                <div className="py-12 text-center text-gray-500">
+                  No completed payments available.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {data.paymentMethods.map((item) => {
+                    const total = data.summary.totalRevenue || 1;
+
+                    const percentage =
+                      (item.amount / total) * 100;
+
+                    return (
+                      <div key={item.method}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-300">
+                            {item.method}
+                          </span>
+
+                          <span className="text-sm font-medium">
+                            {formatCurrency(item.amount)}
+                          </span>
+                        </div>
+
+                        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-white/40 rounded-full"
+                            style={{
+                              width: `${Math.min(
+                                percentage,
+                                100
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
 
-          {/* Project Performance */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="p-6 border-b border-slate-800">
-              <h2 className="text-xl font-semibold">
+          {/* PROJECT PERFORMANCE */}
+          <section className="bg-[#111113] border border-white/10 rounded-2xl overflow-hidden mb-8">
+            <div className="p-6 border-b border-white/10">
+              <h2 className="text-lg font-semibold">
                 Project Performance
               </h2>
 
-              <p className="text-sm text-slate-500 mt-1">
-                Financial summary by project
+              <p className="text-sm text-gray-500 mt-1">
+                Overview of your projects and budgets
               </p>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-800/60">
-                  <tr>
-                    <th className="text-left px-6 py-4 text-sm text-slate-400">
-                      Project
-                    </th>
+            {data.projectPerformance.length === 0 ? (
+              <div className="p-12 text-center text-gray-500">
+                No projects available.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-white/10 text-left">
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">
+                        Project
+                      </th>
 
-                    <th className="text-left px-6 py-4 text-sm text-slate-400">
-                      Client
-                    </th>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">
+                        Client
+                      </th>
 
-                    <th className="text-left px-6 py-4 text-sm text-slate-400">
-                      Budget
-                    </th>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">
+                        Budget
+                      </th>
 
-                    <th className="text-left px-6 py-4 text-sm text-slate-400">
-                      Received
-                    </th>
-
-                    <th className="text-left px-6 py-4 text-sm text-slate-400">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {projectData.map((item) => (
-                    <tr
-                      key={item.project}
-                      className="border-t border-slate-800 hover:bg-slate-800/30"
-                    >
-                      <td className="px-6 py-5 font-medium">
-                        {item.project}
-                      </td>
-
-                      <td className="px-6 py-5 text-sm text-slate-300">
-                        {item.client}
-                      </td>
-
-                      <td className="px-6 py-5 text-sm">
-                        {item.budget}
-                      </td>
-
-                      <td className="px-6 py-5 text-sm text-green-400">
-                        {item.received}
-                      </td>
-
-                      <td className="px-6 py-5">
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs ${
-                            item.status === "Completed"
-                              ? "bg-green-500/10 text-green-400"
-                              : "bg-blue-500/10 text-blue-400"
-                          }`}
-                        >
-                          {item.status}
-                        </span>
-                      </td>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">
+                        Status
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+
+                  <tbody>
+                    {data.projectPerformance.map(
+                      (project) => (
+                        <tr
+                          key={project.id}
+                          className="border-b border-white/5 hover:bg-white/[0.02]"
+                        >
+                          <td className="px-6 py-4">
+                            <p className="font-medium">
+                              {project.name}
+                            </p>
+                          </td>
+
+                          <td className="px-6 py-4 text-gray-400">
+                            {project.client}
+                          </td>
+
+                          <td className="px-6 py-4">
+                            {formatCurrency(project.budget)}
+                          </td>
+
+                          <td className="px-6 py-4">
+                            <span
+                              className={`inline-flex px-3 py-1 rounded-full text-xs ${
+                                project.status ===
+                                "Completed"
+                                  ? "bg-green-500/10 text-green-400"
+                                  : project.status ===
+                                    "In Progress"
+                                  ? "bg-blue-500/10 text-blue-400"
+                                  : "bg-yellow-500/10 text-yellow-400"
+                              }`}
+                            >
+                              {project.status}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* BUSINESS SUMMARY */}
+          <section className="bg-[#111113] border border-white/10 rounded-2xl p-6">
+            <h2 className="text-lg font-semibold mb-6">
+              Business Summary
+            </h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div>
+                <p className="text-sm text-gray-500">
+                  Clients
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {data.summary.totalClients}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Paid Invoice Value
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {formatCurrency(
+                    data.summary.paidInvoiceAmount
+                  )}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Pending Payments
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {formatCurrency(
+                    data.summary.pendingPaymentAmount
+                  )}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Completed Projects
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {data.summary.completedProjects}
+                </p>
+              </div>
             </div>
-          </div>
-
-          {/* Report Note */}
-          <div className="mt-6 bg-blue-500/5 border border-blue-500/20 rounded-xl p-5">
-            <p className="text-sm text-slate-400">
-              <span className="text-blue-400 font-medium">
-                Note:
-              </span>{" "}
-              These reports currently use sample data. Once MongoDB
-              integration is completed, these values will be calculated
-              automatically from your projects, invoices, and payments.
-            </p>
-          </div>
-        </section>
-      </div>
-    </main>
-  );
-}
-
-function ReportCard({
-  title,
-  value,
-  description,
-  icon,
-}: {
-  title: string;
-  value: string;
-  description: string;
-  icon: string;
-}) {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-slate-400">
-            {title}
-          </p>
-
-          <h2 className="text-2xl font-bold mt-2">
-            {value}
-          </h2>
-
-          <p className="text-xs text-slate-500 mt-2">
-            {description}
-          </p>
+          </section>
         </div>
-
-        <div className="text-2xl">
-          {icon}
-        </div>
-      </div>
+      </main>
     </div>
-  );
-}
-
-function SidebarLink({
-  href,
-  label,
-  icon,
-  active = false,
-}: {
-  href: string;
-  label: string;
-  icon: string;
-  active?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition ${
-        active
-          ? "bg-blue-600 text-white"
-          : "text-slate-400 hover:bg-slate-800 hover:text-white"
-      }`}
-    >
-      <span>{icon}</span>
-      <span>{label}</span>
-    </Link>
   );
 }

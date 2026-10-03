@@ -1,74 +1,42 @@
 import { NextResponse } from "next/server";
+
 import connectDB from "@/lib/mongodb";
 import Client from "@/models/Client";
+import User from "@/models/User";
+import { getAuthenticatedUser } from "@/lib/auth";
 
-export async function POST(request: Request) {
+export async function GET() {
   try {
-    const body = await request.json();
+    const user = await getAuthenticatedUser();
 
-    const { freelancerId, name, company, email } = body;
-
-    if (!freelancerId || !name || !company || !email) {
+    if (!user) {
       return NextResponse.json(
         {
           success: false,
-          message: "All fields are required.",
+          message: "Unauthorized.",
         },
-        { status: 400 }
+        { status: 401 }
       );
     }
 
-    await connectDB();
-
-    const client = await Client.create({
-      freelancer: freelancerId,
-      name: name.trim(),
-      company: company.trim(),
-      email: email.toLowerCase().trim(),
-    });
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Client created successfully.",
-        client,
-      },
-      { status: 201 }
-    );
-  } catch (error) {
-    console.error("Create client error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to create client.",
-      },
-      { status: 500 }
-    );
-  }
-}
-
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-
-    const freelancerId = searchParams.get("freelancerId");
-
-    if (!freelancerId) {
+    if (user.role !== "freelancer") {
       return NextResponse.json(
         {
           success: false,
-          message: "Freelancer ID is required.",
+          message: "Only freelancers can access clients.",
         },
-        { status: 400 }
+        { status: 403 }
       );
     }
 
     await connectDB();
 
     const clients = await Client.find({
-      freelancer: freelancerId,
-    }).sort({ createdAt: -1 });
+      freelancer: user.id,
+    })
+      .populate("user", "name email role")
+      .sort({ createdAt: -1 })
+      .lean();
 
     return NextResponse.json({
       success: true,
@@ -80,7 +48,112 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to fetch clients.",
+        message: "Failed to load clients.",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const user = await getAuthenticatedUser();
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Unauthorized.",
+        },
+        { status: 401 }
+      );
+    }
+
+    if (user.role !== "freelancer") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Only freelancers can add clients.",
+        },
+        { status: 403 }
+      );
+    }
+
+    await connectDB();
+
+    const body = await request.json();
+
+    const name = body.name?.trim();
+    const company = body.company?.trim();
+    const email = body.email?.toLowerCase().trim();
+
+    if (!name || !company || !email) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Name, company and email are required.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // Check whether a client with this email
+    // is already connected to this freelancer.
+    const existingClient = await Client.findOne({
+      freelancer: user.id,
+      email,
+    });
+
+    if (existingClient) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "This client is already added.",
+        },
+        { status: 409 }
+      );
+    }
+
+    // Find the client's login account.
+    const clientUser = await User.findOne({
+      email,
+      role: "client",
+    });
+
+    /*
+      If the client has already registered,
+      automatically connect the Client record
+      to their User account.
+    */
+    const client = await Client.create({
+      freelancer: user.id,
+      user: clientUser ? clientUser._id : undefined,
+      name,
+      company,
+      email,
+    });
+
+    const populatedClient = await Client.findById(client._id)
+      .populate("user", "name email role")
+      .lean();
+
+    return NextResponse.json(
+      {
+        success: true,
+        message: clientUser
+          ? "Client added and account connected successfully."
+          : "Client added successfully. They can register using this email to connect their account.",
+        client: populatedClient,
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error("Create client error:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Failed to create client.",
       },
       { status: 500 }
     );

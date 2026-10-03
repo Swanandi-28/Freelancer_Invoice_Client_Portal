@@ -1,518 +1,611 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+type DashboardStats = {
+  totalClients: number;
+  activeProjects: number;
+  pendingInvoiceAmount: number;
+  totalRevenue: number;
+};
+
+type Project = {
+  _id: string;
+  name: string;
+  description?: string;
+  budget: number;
+  deadline: string;
+  status: string;
+  client?: {
+    name: string;
+    company: string;
+  };
+};
+
+type Invoice = {
+  _id: string;
+  invoiceNumber: string;
+  amount: number;
+  issueDate: string;
+  dueDate: string;
+  status: string;
+  client?: {
+    name: string;
+    company: string;
+  };
+  project?: {
+    name: string;
+  };
+};
 
 export default function FreelancerDashboard() {
+  const router = useRouter();
+
+  const [stats, setStats] = useState<DashboardStats>({
+    totalClients: 0,
+    activeProjects: 0,
+    pendingInvoiceAmount: 0,
+    totalRevenue: 0,
+  });
+
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [userName, setUserName] = useState("Freelancer");
+
+  useEffect(() => {
+    const storedUser = localStorage.getItem("user");
+
+    if (storedUser) {
+      try {
+        const user = JSON.parse(storedUser);
+
+        if (user?.role !== "freelancer") {
+          router.push("/login");
+          return;
+        }
+
+        setUserName(user.name || "Freelancer");
+      } catch {
+        localStorage.removeItem("user");
+      }
+    }
+
+    fetchDashboard();
+  }, [router]);
+
+  const fetchDashboard = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const response = await fetch("/api/dashboard/freelancer", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          router.push("/login");
+          return;
+        }
+
+        throw new Error(data.message || "Failed to load dashboard.");
+      }
+
+      setStats(data.stats);
+      setProjects(data.recentProjects || []);
+      setInvoices(data.recentInvoices || []);
+    } catch (error) {
+      console.error(error);
+      setError("Unable to load dashboard data.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error(error);
+    }
+
+    localStorage.removeItem("user");
+    router.push("/login");
+  };
+
+  const formatCurrency = (amount: number) => {
+    return `₹${amount.toLocaleString("en-IN")}`;
+  };
+
+  const formatDate = (date: string) => {
+    if (!date) return "-";
+
+    return new Date(date).toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const getStatusStyle = (status: string) => {
+    switch (status) {
+      case "Completed":
+      case "Paid":
+        return "bg-green-500/10 text-green-400";
+
+      case "Pending":
+      case "Overdue":
+        return "bg-yellow-500/10 text-yellow-400";
+
+      case "In Progress":
+        return "bg-blue-500/10 text-blue-400";
+
+      default:
+        return "bg-gray-500/10 text-gray-400";
+    }
+  };
+
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-
-      {/* Navbar */}
-      <nav className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-6">
-
-        <Link href="/" className="text-xl font-bold">
-          Freelancer<span className="text-blue-500">Portal</span>
-        </Link>
-
-        <div className="flex items-center gap-5">
-
-          <span className="text-sm text-slate-400">
-            Welcome, Freelancer
-          </span>
-
+    <div className="min-h-screen bg-[#0b0f19] text-white">
+      {/* NAVBAR */}
+      <header className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
+        <div className="flex h-16 items-center justify-between px-6">
           <Link
-            href="/login"
-            className="text-sm text-slate-400 hover:text-white"
+            href="/freelancer/dashboard"
+            className="text-xl font-bold text-white"
           >
-            Logout
+            Freelancer<span className="text-blue-500">Portal</span>
           </Link>
 
+          <div className="flex items-center gap-5">
+            <span className="text-sm text-gray-300">
+              {userName}
+            </span>
+
+            <button
+              onClick={handleLogout}
+              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
+            >
+              Logout
+            </button>
+          </div>
         </div>
+      </header>
 
-      </nav>
+      {/* SIDEBAR */}
+      <aside className="fixed left-0 top-16 bottom-0 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
+        <nav className="space-y-2 p-4">
 
+          <Link
+            href="/freelancer/dashboard"
+            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
+          >
+            Dashboard
+          </Link>
 
-      {/* Main Layout */}
-      <div className="flex">
+          <Link
+            href="/freelancer/clients"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Clients
+          </Link>
 
-        {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 p-5">
+          <Link
+            href="/freelancer/projects"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Projects
+          </Link>
 
-          <div className="mb-8">
-            <p className="text-xs uppercase tracking-wider text-slate-500">
-              Freelancer
-            </p>
+          <Link
+            href="/freelancer/invoices"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Invoices
+          </Link>
 
-            <h2 className="text-lg font-semibold mt-1">
-              Dashboard
-            </h2>
-          </div>
+          <Link
+            href="/freelancer/payments"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Payments
+          </Link>
 
+          <Link
+            href="/freelancer/files"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Files
+          </Link>
 
-          <nav className="space-y-2">
+          <Link
+            href="/freelancer/messages"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Messages
+          </Link>
 
-            <SidebarLink
-              href="/freelancer/dashboard"
-              label="Dashboard"
-              icon="📊"
-              active
-            />
+          <Link
+            href="/freelancer/reports"
+            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+          >
+            Reports
+          </Link>
+        </nav>
+      </aside>
 
-            <SidebarLink
-              href="/freelancer/clients"
-              label="Clients"
-              icon="👥"
-            />
+      {/* MAIN CONTENT */}
+      <main className="pt-16 md:ml-64">
+        <div className="p-6 md:p-8">
 
-            <SidebarLink
-              href="/freelancer/projects"
-              label="Projects"
-              icon="📁"
-            />
-
-            <SidebarLink
-              href="/freelancer/invoices"
-              label="Invoices"
-              icon="🧾"
-            />
-
-            <SidebarLink
-              href="/freelancer/payments"
-              label="Payments"
-              icon="💳"
-            />
-
-            <SidebarLink
-              href="/freelancer/files"
-              label="Files"
-              icon="📎"
-            />
-
-            <SidebarLink
-              href="/freelancer/messages"
-              label="Messages"
-              icon="💬"
-            />
-
-            <SidebarLink
-              href="/freelancer/reports"
-              label="Reports"
-              icon="📈"
-            />
-
-          </nav>
-
-
-          {/* Profile */}
-          <div className="absolute bottom-6 left-5 w-52 border-t border-slate-800 pt-4">
-
-            <div className="flex items-center gap-3">
-
-              <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold">
-                F
-              </div>
-
-              <div>
-                <p className="text-sm font-medium">
-                  Freelancer
-                </p>
-
-                <p className="text-xs text-slate-500">
-                  freelancer@example.com
-                </p>
-              </div>
-
-            </div>
-
-          </div>
-
-        </aside>
-
-
-        {/* Dashboard Content */}
-        <section className="flex-1 p-8">
-
-          {/* Header */}
-          <div className="flex items-center justify-between mb-8">
-
+          {/* HEADER */}
+          <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
             <div>
               <h1 className="text-3xl font-bold">
-                Dashboard
+                Welcome back, {userName} 👋
               </h1>
 
-              <p className="text-slate-400 mt-2">
-                Here's an overview of your freelance business.
+              <p className="mt-2 text-gray-400">
+                Here's what's happening with your freelance business.
               </p>
             </div>
 
-            <Link
-              href="/freelancer/invoices"
-              className="px-5 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium"
+            <button
+              onClick={fetchDashboard}
+              className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-gray-300 transition hover:bg-white/10"
             >
-              + Create Invoice
-            </Link>
-
+              ↻ Refresh
+            </button>
           </div>
 
+          {/* ERROR */}
+          {error && (
+            <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-red-400">
+              {error}
+            </div>
+          )}
 
-          {/* Statistics */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 mb-8">
+          {/* STATS */}
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
 
-            <StatCard
-              title="Total Clients"
-              value="12"
-              icon="👥"
-              description="Active clients"
-            />
+            {/* CLIENTS */}
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-sm text-gray-400">
+                  Total Clients
+                </span>
 
-            <StatCard
-              title="Active Projects"
-              value="8"
-              icon="📁"
-              description="Currently running"
-            />
-
-            <StatCard
-              title="Pending Invoices"
-              value="₹45,000"
-              icon="🧾"
-              description="Awaiting payment"
-            />
-
-            <StatCard
-              title="Total Revenue"
-              value="₹2,45,000"
-              icon="💰"
-              description="This year"
-            />
-
-          </div>
-
-
-          {/* Main Cards */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-
-            {/* Recent Projects */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-
-              <div className="flex items-center justify-between mb-6">
-
-                <h2 className="text-xl font-semibold">
-                  Recent Projects
-                </h2>
-
-                <Link
-                  href="/freelancer/projects"
-                  className="text-sm text-blue-400 hover:text-blue-300"
-                >
-                  View all
-                </Link>
-
+                <span className="rounded-lg bg-blue-500/10 p-2 text-blue-400">
+                  👥
+                </span>
               </div>
 
+              <p className="text-3xl font-bold">
+                {loading ? "..." : stats.totalClients}
+              </p>
 
-              <div className="space-y-4">
-
-                <ProjectRow
-                  name="E-commerce Website"
-                  client="ABC Company"
-                  status="In Progress"
-                />
-
-                <ProjectRow
-                  name="Brand Identity Design"
-                  client="XYZ Solutions"
-                  status="In Progress"
-                />
-
-                <ProjectRow
-                  name="Mobile App UI"
-                  client="Tech Startup"
-                  status="Completed"
-                />
-
-              </div>
-
+              <p className="mt-2 text-xs text-gray-500">
+                Clients connected to you
+              </p>
             </div>
 
+            {/* PROJECTS */}
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-sm text-gray-400">
+                  Active Projects
+                </span>
 
-            {/* Recent Invoices */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-
-              <div className="flex items-center justify-between mb-6">
-
-                <h2 className="text-xl font-semibold">
-                  Recent Invoices
-                </h2>
-
-                <Link
-                  href="/freelancer/invoices"
-                  className="text-sm text-blue-400 hover:text-blue-300"
-                >
-                  View all
-                </Link>
-
+                <span className="rounded-lg bg-purple-500/10 p-2 text-purple-400">
+                  📁
+                </span>
               </div>
 
+              <p className="text-3xl font-bold">
+                {loading ? "..." : stats.activeProjects}
+              </p>
 
-              <div className="space-y-4">
-
-                <InvoiceRow
-                  invoice="#INV-001"
-                  client="ABC Company"
-                  amount="₹25,000"
-                  status="Paid"
-                />
-
-                <InvoiceRow
-                  invoice="#INV-002"
-                  client="XYZ Solutions"
-                  amount="₹18,000"
-                  status="Pending"
-                />
-
-                <InvoiceRow
-                  invoice="#INV-003"
-                  client="Tech Startup"
-                  amount="₹32,000"
-                  status="Overdue"
-                />
-
-              </div>
-
+              <p className="mt-2 text-xs text-gray-500">
+                Projects currently in progress
+              </p>
             </div>
 
+            {/* PENDING INVOICES */}
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-sm text-gray-400">
+                  Pending Invoices
+                </span>
+
+                <span className="rounded-lg bg-yellow-500/10 p-2 text-yellow-400">
+                  🧾
+                </span>
+              </div>
+
+              <p className="text-3xl font-bold">
+                {loading
+                  ? "..."
+                  : formatCurrency(stats.pendingInvoiceAmount)}
+              </p>
+
+              <p className="mt-2 text-xs text-gray-500">
+                Pending + overdue invoices
+              </p>
+            </div>
+
+            {/* REVENUE */}
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-sm text-gray-400">
+                  Total Revenue
+                </span>
+
+                <span className="rounded-lg bg-green-500/10 p-2 text-green-400">
+                  ₹
+                </span>
+              </div>
+
+              <p className="text-3xl font-bold">
+                {loading
+                  ? "..."
+                  : formatCurrency(stats.totalRevenue)}
+              </p>
+
+              <p className="mt-2 text-xs text-gray-500">
+                From completed payments
+              </p>
+            </div>
           </div>
 
-
-          {/* Quick Actions */}
-          <div className="mt-6 bg-slate-900 border border-slate-800 rounded-xl p-6">
-
-            <h2 className="text-xl font-semibold mb-5">
+          {/* QUICK ACTIONS */}
+          <div className="mt-8">
+            <h2 className="mb-4 text-xl font-semibold">
               Quick Actions
             </h2>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 
-              <QuickAction
+              <Link
                 href="/freelancer/clients"
-                icon="👥"
-                label="Add Client"
-              />
+                className="rounded-xl border border-white/10 bg-[#111827] p-5 transition hover:border-blue-500/40 hover:bg-white/5"
+              >
+                <div className="mb-3 text-2xl">👥</div>
+                <h3 className="font-semibold">Add Client</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Create a new client
+                </p>
+              </Link>
 
-              <QuickAction
+              <Link
                 href="/freelancer/projects"
-                icon="📁"
-                label="New Project"
-              />
+                className="rounded-xl border border-white/10 bg-[#111827] p-5 transition hover:border-blue-500/40 hover:bg-white/5"
+              >
+                <div className="mb-3 text-2xl">📁</div>
+                <h3 className="font-semibold">New Project</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Start a new project
+                </p>
+              </Link>
 
-              <QuickAction
+              <Link
                 href="/freelancer/invoices"
-                icon="🧾"
-                label="Create Invoice"
-              />
+                className="rounded-xl border border-white/10 bg-[#111827] p-5 transition hover:border-blue-500/40 hover:bg-white/5"
+              >
+                <div className="mb-3 text-2xl">🧾</div>
+                <h3 className="font-semibold">Create Invoice</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Generate an invoice
+                </p>
+              </Link>
 
-              <QuickAction
-                href="/freelancer/files"
-                icon="📎"
-                label="Upload File"
-              />
+              <Link
+                href="/freelancer/payments"
+                className="rounded-xl border border-white/10 bg-[#111827] p-5 transition hover:border-blue-500/40 hover:bg-white/5"
+              >
+                <div className="mb-3 text-2xl">💰</div>
+                <h3 className="font-semibold">Record Payment</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Record a client payment
+                </p>
+              </Link>
 
             </div>
-
           </div>
 
-        </section>
+          {/* RECENT PROJECTS */}
+          <div className="mt-8 rounded-xl border border-white/10 bg-[#111827]">
+            <div className="flex items-center justify-between border-b border-white/10 p-5">
+              <div>
+                <h2 className="text-lg font-semibold">
+                  Recent Projects
+                </h2>
 
-      </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  Your latest projects
+                </p>
+              </div>
 
-    </main>
-  );
-}
+              <Link
+                href="/freelancer/projects"
+                className="text-sm text-blue-400 hover:text-blue-300"
+              >
+                View all →
+              </Link>
+            </div>
 
+            <div className="overflow-x-auto">
+              {loading ? (
+                <div className="p-6 text-gray-500">
+                  Loading projects...
+                </div>
+              ) : projects.length === 0 ? (
+                <div className="p-6 text-gray-500">
+                  No projects found. Create your first project.
+                </div>
+              ) : (
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-white/10 text-left text-xs uppercase text-gray-500">
+                      <th className="px-5 py-4">Project</th>
+                      <th className="px-5 py-4">Client</th>
+                      <th className="px-5 py-4">Budget</th>
+                      <th className="px-5 py-4">Deadline</th>
+                      <th className="px-5 py-4">Status</th>
+                    </tr>
+                  </thead>
 
-/* Sidebar Link */
+                  <tbody>
+                    {projects.map((project) => (
+                      <tr
+                        key={project._id}
+                        className="border-b border-white/5 last:border-0"
+                      >
+                        <td className="px-5 py-4">
+                          <p className="font-medium">
+                            {project.name}
+                          </p>
 
-function SidebarLink({
-  href,
-  label,
-  icon,
-  active = false,
-}: {
-  href: string;
-  label: string;
-  icon: string;
-  active?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition ${
-        active
-          ? "bg-blue-600 text-white"
-          : "text-slate-400 hover:bg-slate-800 hover:text-white"
-      }`}
-    >
-      <span>{icon}</span>
-      <span>{label}</span>
-    </Link>
-  );
-}
+                          <p className="mt-1 text-xs text-gray-500">
+                            {project.description || "No description"}
+                          </p>
+                        </td>
 
+                        <td className="px-5 py-4 text-sm text-gray-300">
+                          {project.client?.company ||
+                            project.client?.name ||
+                            "Unknown"}
+                        </td>
 
-/* Statistics Card */
+                        <td className="px-5 py-4 text-sm">
+                          {formatCurrency(project.budget)}
+                        </td>
 
-function StatCard({
-  title,
-  value,
-  icon,
-  description,
-}: {
-  title: string;
-  value: string;
-  icon: string;
-  description: string;
-}) {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                        <td className="px-5 py-4 text-sm text-gray-400">
+                          {formatDate(project.deadline)}
+                        </td>
 
-      <div className="flex items-center justify-between">
+                        <td className="px-5 py-4">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs ${getStatusStyle(
+                              project.status
+                            )}`}
+                          >
+                            {project.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
 
-        <div>
-          <p className="text-sm text-slate-400">
-            {title}
-          </p>
+          {/* RECENT INVOICES */}
+          <div className="mt-8 rounded-xl border border-white/10 bg-[#111827]">
+            <div className="flex items-center justify-between border-b border-white/10 p-5">
+              <div>
+                <h2 className="text-lg font-semibold">
+                  Recent Invoices
+                </h2>
 
-          <p className="text-2xl font-bold mt-2">
-            {value}
-          </p>
+                <p className="mt-1 text-sm text-gray-500">
+                  Your latest invoices
+                </p>
+              </div>
 
-          <p className="text-xs text-slate-500 mt-2">
-            {description}
-          </p>
+              <Link
+                href="/freelancer/invoices"
+                className="text-sm text-blue-400 hover:text-blue-300"
+              >
+                View all →
+              </Link>
+            </div>
+
+            <div className="overflow-x-auto">
+              {loading ? (
+                <div className="p-6 text-gray-500">
+                  Loading invoices...
+                </div>
+              ) : invoices.length === 0 ? (
+                <div className="p-6 text-gray-500">
+                  No invoices found. Create your first invoice.
+                </div>
+              ) : (
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-white/10 text-left text-xs uppercase text-gray-500">
+                      <th className="px-5 py-4">Invoice</th>
+                      <th className="px-5 py-4">Client</th>
+                      <th className="px-5 py-4">Project</th>
+                      <th className="px-5 py-4">Amount</th>
+                      <th className="px-5 py-4">Due Date</th>
+                      <th className="px-5 py-4">Status</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {invoices.map((invoice) => (
+                      <tr
+                        key={invoice._id}
+                        className="border-b border-white/5 last:border-0"
+                      >
+                        <td className="px-5 py-4 font-medium">
+                          {invoice.invoiceNumber}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-gray-300">
+                          {invoice.client?.company ||
+                            invoice.client?.name ||
+                            "Unknown"}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-gray-400">
+                          {invoice.project?.name || "Unknown"}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm font-medium">
+                          {formatCurrency(invoice.amount)}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-gray-400">
+                          {formatDate(invoice.dueDate)}
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs ${getStatusStyle(
+                              invoice.status
+                            )}`}
+                          >
+                            {invoice.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          {/* FOOTER */}
+          <div className="mt-8 border-t border-white/10 py-6 text-center text-sm text-gray-600">
+            FreelancerPortal © 2026 — Freelancer Invoice & Client Portal
+          </div>
         </div>
-
-        <div className="text-3xl">
-          {icon}
-        </div>
-
-      </div>
-
+      </main>
     </div>
-  );
-}
-
-
-/* Project Row */
-
-function ProjectRow({
-  name,
-  client,
-  status,
-}: {
-  name: string;
-  client: string;
-  status: string;
-}) {
-  return (
-    <div className="flex items-center justify-between p-4 bg-slate-950 rounded-lg">
-
-      <div>
-        <p className="font-medium">
-          {name}
-        </p>
-
-        <p className="text-sm text-slate-500 mt-1">
-          {client}
-        </p>
-      </div>
-
-      <span
-        className={`text-xs px-3 py-1 rounded-full ${
-          status === "Completed"
-            ? "bg-green-500/10 text-green-400"
-            : "bg-blue-500/10 text-blue-400"
-        }`}
-      >
-        {status}
-      </span>
-
-    </div>
-  );
-}
-
-
-/* Invoice Row */
-
-function InvoiceRow({
-  invoice,
-  client,
-  amount,
-  status,
-}: {
-  invoice: string;
-  client: string;
-  amount: string;
-  status: string;
-}) {
-  return (
-    <div className="flex items-center justify-between p-4 bg-slate-950 rounded-lg">
-
-      <div>
-        <p className="font-medium">
-          {invoice}
-        </p>
-
-        <p className="text-sm text-slate-500 mt-1">
-          {client}
-        </p>
-      </div>
-
-      <div className="text-right">
-
-        <p className="font-medium">
-          {amount}
-        </p>
-
-        <span
-          className={`text-xs ${
-            status === "Paid"
-              ? "text-green-400"
-              : status === "Overdue"
-              ? "text-red-400"
-              : "text-yellow-400"
-          }`}
-        >
-          {status}
-        </span>
-
-      </div>
-
-    </div>
-  );
-}
-
-
-/* Quick Action */
-
-function QuickAction({
-  href,
-  icon,
-  label,
-}: {
-  href: string;
-  icon: string;
-  label: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="p-4 rounded-lg border border-slate-800 hover:border-blue-500 hover:bg-slate-800 transition text-center"
-    >
-      <div className="text-2xl mb-2">
-        {icon}
-      </div>
-
-      <p className="text-sm font-medium">
-        {label}
-      </p>
-    </Link>
   );
 }

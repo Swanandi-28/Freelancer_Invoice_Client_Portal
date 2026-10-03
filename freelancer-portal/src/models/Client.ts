@@ -2,9 +2,14 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface IClient extends Document {
   freelancer: mongoose.Types.ObjectId;
+
+  // Links this client record to the client's login account
+  user?: mongoose.Types.ObjectId;
+
   name: string;
   company: string;
   email: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -15,6 +20,12 @@ const ClientSchema = new Schema<IClient>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+
+    user: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: false,
     },
 
     name: {
