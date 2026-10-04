@@ -1,224 +1,161 @@
 import { NextResponse } from "next/server";
+import mongoose from "mongoose";
 
-import connectDB from "@/lib/mongodb";
 import Message from "@/models/Message";
 import Client from "@/models/Client";
 import Project from "@/models/Project";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { getClientRelationships, requireUser, resolveScope } from "@/lib/access";
+import { cleanString, fail, isObjectId, readJson, serverError } from "@/lib/api";
+
+/*
+  Messages are private to ONE freelancer-client relationship
+  (Message.client = the Client relationship document).
+
+    Freelancer A <-> ABC Company   is a different conversation from
+    Freelancer B <-> ABC Company
+
+  Both roles use this same route; the server works out which
+  conversations the logged-in user may see.
+*/
 
 // =====================================================
-// GET MESSAGES
+// GET MESSAGES  (?clientId= for one conversation)
+//   freelancer: messages where freelancer = me
+//   client:     messages where client IN my Client relationship ids
 // =====================================================
-
 export async function GET(request: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser();
+    if (auth.response) return auth.response;
+    const user = auth.user;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
+    const params = new URL(request.url).searchParams;
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can access these messages.",
-        },
-        { status: 403 }
-      );
-    }
+    const scoped = await resolveScope(user, params);
+    if (scoped.response) return scoped.response;
 
-    await connectDB();
-
-    const { searchParams } = new URL(request.url);
-
-    const clientId = searchParams.get("clientId");
-
-    const query: any = {
-      freelancer: user.id,
-    };
-
-    if (clientId) {
-      query.client = clientId;
-    }
-
-    const messages = await Message.find(query)
+    // Reading the list does NOT mark anything as read. That happens only
+    // when the recipient opens the conversation: PATCH /api/messages/read.
+    const messages = await Message.find(scoped.scope.filter)
       .populate("client", "name company email")
       .populate("project", "name")
+      .populate("freelancer", "name email")
       .sort({ createdAt: 1 })
       .lean();
 
-    return NextResponse.json({
-      success: true,
-      messages,
-    });
+    return NextResponse.json({ success: true, messages });
   } catch (error) {
-    console.error("Get messages error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to load messages.",
-      },
-      { status: 500 }
-    );
+    return serverError("Get messages error", error, "Failed to load messages.");
   }
 }
 
 // =====================================================
 // SEND MESSAGE
+//   body: { clientId, message, projectId? }
+//   clientId = the Client relationship id (the conversation)
 // =====================================================
-
 export async function POST(request: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser();
+    if (auth.response) return auth.response;
+    const user = auth.user;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
+    if (user.role === "admin") {
+      return fail("Administrators cannot send messages.", 403);
+    }
+    const senderRole: "freelancer" | "client" = user.role;
+
+    const body = await readJson(request);
+    if (!body) return fail("Invalid request body.", 400);
+
+    const { clientId, projectId } = body;
+    const text = cleanString(body.message, 5000);
+
+    if (!clientId || !text) {
+      return fail("Conversation and message are required.", 400);
     }
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can send messages.",
-        },
-        { status: 403 }
-      );
+    if (!isObjectId(clientId) || (projectId && !isObjectId(projectId))) {
+      return fail("Invalid client or project id.", 400);
     }
 
-    await connectDB();
+    // ---------- Verify the relationship belongs to the sender ----------
+    let relationship: {
+      _id: mongoose.Types.ObjectId;
+      freelancer?: mongoose.Types.ObjectId;
+    } | null = null;
 
-    const body = await request.json();
+    if (user.role === "freelancer") {
+      const owned = await Client.findOne({
+        _id: clientId,
+        freelancer: user.id,
+      })
+        .select("_id freelancer")
+        .lean();
 
-    const {
-      clientId,
-      projectId,
-      message,
-    } = body;
-
-    // -------------------------------------------------
-    // VALIDATION
-    // -------------------------------------------------
-
-    if (!clientId || !message?.trim()) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Client and message are required.",
-        },
-        { status: 400 }
+      if (owned) {
+        relationship = {
+          _id: owned._id as mongoose.Types.ObjectId,
+          freelancer: owned.freelancer,
+        };
+      }
+    } else {
+      const relationships = await getClientRelationships(user);
+      const match = relationships.find(
+        (item) => item._id.toString() === clientId
       );
+
+      if (match) {
+        const freelancer = match.freelancer as unknown as {
+          _id?: mongoose.Types.ObjectId;
+        } | null;
+        relationship = {
+          _id: match._id as mongoose.Types.ObjectId,
+          freelancer: freelancer?._id,
+        };
+      }
     }
 
-    // -------------------------------------------------
-    // VERIFY CLIENT
-    // -------------------------------------------------
-
-    const client = await Client.findOne({
-      _id: clientId,
-      freelancer: user.id,
-    });
-
-    if (!client) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Invalid client.",
-        },
-        { status: 403 }
-      );
+    if (!relationship || !relationship.freelancer) {
+      return fail("Conversation not found.", 404);
     }
 
-    // -------------------------------------------------
-    // VERIFY PROJECT IF PROVIDED
-    // -------------------------------------------------
-
+    // ---------- Optional project must be inside the same relationship ----------
     let validProject = null;
 
     if (projectId) {
       validProject = await Project.findOne({
         _id: projectId,
-        client: clientId,
-        freelancer: user.id,
-      });
+        client: relationship._id,
+        freelancer: relationship.freelancer,
+      }).select("_id");
 
       if (!validProject) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Invalid project.",
-          },
-          { status: 403 }
-        );
+        return fail("This project does not belong to this conversation.", 400);
       }
     }
 
-    // -------------------------------------------------
-    // CREATE MESSAGE
-    // -------------------------------------------------
-
     const newMessage = await Message.create({
-      freelancer: user.id,
-      client: clientId,
-
-      project: validProject
-        ? validProject._id
-        : undefined,
-
-      senderRole: "freelancer",
-
+      freelancer: relationship.freelancer,
+      client: relationship._id,
+      project: validProject ? validProject._id : undefined,
+      senderRole,
       senderId: user.id,
-
-      message: message.trim(),
-
-      read: true,
+      message: text,
+      read: false, // unread until the other side opens the conversation
     });
 
-    // -------------------------------------------------
-    // RETURN MESSAGE
-    // -------------------------------------------------
-
-    const populatedMessage =
-      await Message.findById(newMessage._id)
-        .populate(
-          "client",
-          "name company email"
-        )
-        .populate(
-          "project",
-          "name"
-        )
-        .lean();
+    const populatedMessage = await Message.findById(newMessage._id)
+      .populate("client", "name company email")
+      .populate("project", "name")
+      .populate("freelancer", "name email")
+      .lean();
 
     return NextResponse.json(
-      {
-        success: true,
-        message: populatedMessage,
-      },
+      { success: true, message: populatedMessage },
       { status: 201 }
     );
   } catch (error) {
-    console.error("Send message error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to send message.",
-      },
-      { status: 500 }
-    );
+    return serverError("Send message error", error, "Failed to send message.");
   }
 }

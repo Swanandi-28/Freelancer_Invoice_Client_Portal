@@ -59,23 +59,8 @@ export default function FreelancerDashboard() {
   const [userName, setUserName] = useState("Freelancer");
 
   useEffect(() => {
-    const storedUser = localStorage.getItem("user");
-
-    if (storedUser) {
-      try {
-        const user = JSON.parse(storedUser);
-
-        if (user?.role !== "freelancer") {
-          router.push("/login");
-          return;
-        }
-
-        setUserName(user.name || "Freelancer");
-      } catch {
-        localStorage.removeItem("user");
-      }
-    }
-
+// The signed-in user comes from the server (HTTP-only cookie),
+    // not from localStorage.
     fetchDashboard();
   }, [router]);
 
@@ -101,6 +86,7 @@ export default function FreelancerDashboard() {
       }
 
       setStats(data.stats);
+      setUserName(data.user?.name || "Freelancer");
       setProjects(data.recentProjects || []);
       setInvoices(data.recentInvoices || []);
     } catch (error) {
@@ -157,96 +143,13 @@ export default function FreelancerDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-white">
+    <div>
       {/* NAVBAR */}
-      <header className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
-        <div className="flex h-16 items-center justify-between px-6">
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold text-white"
-          >
-            Freelancer<span className="text-blue-500">Portal</span>
-          </Link>
-
-          <div className="flex items-center gap-5">
-            <span className="text-sm text-gray-300">
-              {userName}
-            </span>
-
-            <button
-              onClick={handleLogout}
-              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
 
       {/* SIDEBAR */}
-      <aside className="fixed left-0 top-16 bottom-0 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
-        <nav className="space-y-2 p-4">
-
-          <Link
-            href="/freelancer/dashboard"
-            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
-          >
-            Dashboard
-          </Link>
-
-          <Link
-            href="/freelancer/clients"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Clients
-          </Link>
-
-          <Link
-            href="/freelancer/projects"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Projects
-          </Link>
-
-          <Link
-            href="/freelancer/invoices"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Invoices
-          </Link>
-
-          <Link
-            href="/freelancer/payments"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Payments
-          </Link>
-
-          <Link
-            href="/freelancer/files"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Files
-          </Link>
-
-          <Link
-            href="/freelancer/messages"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Messages
-          </Link>
-
-          <Link
-            href="/freelancer/reports"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Reports
-          </Link>
-        </nav>
-      </aside>
 
       {/* MAIN CONTENT */}
-      <main className="pt-16 md:ml-64">
+      <div>
         <div className="p-6 md:p-8">
 
           {/* HEADER */}
@@ -340,7 +243,7 @@ export default function FreelancerDashboard() {
               </p>
 
               <p className="mt-2 text-xs text-gray-500">
-                Pending + overdue invoices
+                Unpaid balance on your invoices
               </p>
             </div>
 
@@ -605,7 +508,7 @@ export default function FreelancerDashboard() {
             FreelancerPortal © 2026 — Freelancer Invoice & Client Portal
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

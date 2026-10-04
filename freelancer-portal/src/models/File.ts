@@ -68,6 +68,12 @@ const FileSchema = new Schema<IFile>(
   }
 );
 
+FileSchema.index({
+  freelancer: 1,
+  client: 1,
+  project: 1,
+});
+
 const File: Model<IFile> =
   mongoose.models.File ||
   mongoose.model<IFile>("File", FileSchema);

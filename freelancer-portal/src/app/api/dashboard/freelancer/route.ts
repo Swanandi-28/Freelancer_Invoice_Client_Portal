@@ -1,113 +1,78 @@
 import { NextResponse } from "next/server";
-import connectDB from "@/lib/mongodb";
+
 import Client from "@/models/Client";
 import Project from "@/models/Project";
 import Invoice from "@/models/Invoice";
 import Payment from "@/models/Payment";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { requireUser } from "@/lib/access";
+import { sum, withInvoiceAmounts, withProjectAmounts } from "@/lib/finance";
+import { serverError } from "@/lib/api";
 
 export async function GET() {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser("freelancer");
+    if (auth.response) return auth.response;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
+    const freelancerId = auth.user.id;
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can access this dashboard.",
-        },
-        { status: 403 }
-      );
-    }
+    const [totalClients, activeProjects, rawInvoices, completedPayments, rawRecentProjects, projectBudgets] =
+      await Promise.all([
+        Client.countDocuments({ freelancer: freelancerId }),
+        Project.countDocuments({ freelancer: freelancerId, status: "In Progress" }),
+        Invoice.find({ freelancer: freelancerId })
+          .populate("client", "name company")
+          .populate("project", "name")
+          .sort({ createdAt: -1 })
+          .lean(),
+        Payment.find({ freelancer: freelancerId, status: "Completed" })
+          .select("amount")
+          .lean(),
+        Project.find({ freelancer: freelancerId })
+          .populate("client", "name company")
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .lean(),
+        Project.find({ freelancer: freelancerId }).select("budget").lean(),
+      ]);
 
-    await connectDB();
+    const invoices = await withInvoiceAmounts(rawInvoices);
+    const recentProjects = await withProjectAmounts(rawRecentProjects);
 
-    const freelancerId = user.id;
-
-    // Total clients
-    const totalClients = await Client.countDocuments({
-      freelancer: freelancerId,
-    });
-
-    // Active projects
-    const activeProjects = await Project.countDocuments({
-      freelancer: freelancerId,
-      status: "In Progress",
-    });
-
-    // Pending invoices
-    const pendingInvoices = await Invoice.find({
-      freelancer: freelancerId,
-      status: {
-        $in: ["Pending", "Overdue"],
-      },
-    });
-
-    const pendingInvoiceAmount = pendingInvoices.reduce(
-      (total, invoice) => total + invoice.amount,
-      0
+    // Pending Project Amount = sum over projects of
+    // (project budget - completed payments of that project).
+    const pendingProjectAmount = sum(
+      (await withProjectAmounts(projectBudgets)).map((project) => project.pendingAmount)
     );
 
-    // Total revenue from completed payments
-    const completedPayments = await Payment.find({
-      freelancer: freelancerId,
-      status: "Completed",
-    });
-
-    const totalRevenue = completedPayments.reduce(
-      (total, payment) => total + payment.amount,
-      0
+    // Pending Invoice Amount = sum of (invoice amount - completed payments
+    // for that invoice) over all active (non-draft) invoices.
+    const pendingInvoiceAmount = sum(
+      invoices
+        .filter((invoice) => invoice.status !== "Draft")
+        .map((invoice) => invoice.pendingAmount)
     );
 
-    // Recent projects
-    const recentProjects = await Project.find({
-      freelancer: freelancerId,
-    })
-      .populate("client", "name company")
-      .sort({ createdAt: -1 })
-      .limit(5);
-
-    // Recent invoices
-    const recentInvoices = await Invoice.find({
-      freelancer: freelancerId,
-    })
-      .populate("client", "name company")
-      .populate("project", "name")
-      .sort({ createdAt: -1 })
-      .limit(5);
+    // Total Revenue = all completed payments received.
+    const totalRevenue = sum(completedPayments.map((payment) => payment.amount));
 
     return NextResponse.json({
       success: true,
-
+      user: { name: auth.user.name, email: auth.user.email },
       stats: {
         totalClients,
         activeProjects,
         pendingInvoiceAmount,
+        pendingProjectAmount,
         totalRevenue,
       },
-
       recentProjects,
-      recentInvoices,
+      recentInvoices: invoices.slice(0, 5),
     });
   } catch (error) {
-    console.error("Freelancer dashboard error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to load dashboard data.",
-      },
-      { status: 500 }
+    return serverError(
+      "Freelancer dashboard error",
+      error,
+      "Failed to load dashboard data."
     );
   }
 }

@@ -31,6 +31,8 @@ type Invoice = {
   _id: string;
   invoiceNumber: string;
   amount: number;
+  paidAmount: number;
+  pendingAmount: number;
   issueDate: string;
   dueDate: string;
   status: "Draft" | "Pending" | "Paid" | "Overdue";
@@ -46,6 +48,7 @@ type Invoice = {
     | {
         _id: string;
         name: string;
+        budget?: number;
       };
   createdAt: string;
 };
@@ -75,10 +78,6 @@ export default function FreelancerInvoicesPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // --------------------------------------------------
-  // LOAD DATA
-  // --------------------------------------------------
-
   useEffect(() => {
     fetchData();
   }, []);
@@ -88,20 +87,23 @@ export default function FreelancerInvoicesPage() {
       setLoading(true);
       setError("");
 
-      const [clientsResponse, projectsResponse, invoicesResponse] =
-        await Promise.all([
-          fetch("/api/clients", {
-            cache: "no-store",
-          }),
+      const [
+        clientsResponse,
+        projectsResponse,
+        invoicesResponse,
+      ] = await Promise.all([
+        fetch("/api/clients", {
+          cache: "no-store",
+        }),
 
-          fetch("/api/projects", {
-            cache: "no-store",
-          }),
+        fetch("/api/projects", {
+          cache: "no-store",
+        }),
 
-          fetch("/api/invoices", {
-            cache: "no-store",
-          }),
-        ]);
+        fetch("/api/invoices", {
+          cache: "no-store",
+        }),
+      ]);
 
       const clientsData = await clientsResponse.json();
       const projectsData = await projectsResponse.json();
@@ -136,7 +138,27 @@ export default function FreelancerInvoicesPage() {
 
       setClients(clientsData.clients || []);
       setProjects(projectsData.projects || []);
-      setInvoices(invoicesData.invoices || []);
+
+      /*
+        IMPORTANT:
+        The API already calculates:
+
+        pendingAmount =
+        invoice.amount - completed payments for THAT invoice
+      */
+
+      setInvoices(
+        (invoicesData.invoices || []).map(
+          (invoice: Invoice) => ({
+            ...invoice,
+            amount: Number(invoice.amount || 0),
+            paidAmount: Number(invoice.paidAmount || 0),
+            pendingAmount: Number(
+              invoice.pendingAmount ?? invoice.amount ?? 0
+            ),
+          })
+        )
+      );
     } catch (error) {
       console.error(error);
 
@@ -150,13 +172,9 @@ export default function FreelancerInvoicesPage() {
     }
   };
 
-  // --------------------------------------------------
-  // FILTER PROJECTS BY SELECTED CLIENT
-  // --------------------------------------------------
-
   const availableProjects = useMemo(() => {
     if (!selectedClient) {
-      return projects;
+      return [];
     }
 
     return projects.filter((project) => {
@@ -169,24 +187,14 @@ export default function FreelancerInvoicesPage() {
     });
   }, [projects, selectedClient]);
 
-  // --------------------------------------------------
-  // HANDLE CLIENT CHANGE
-  // --------------------------------------------------
-
   const handleClientChange = (
     event: React.ChangeEvent<HTMLSelectElement>
   ) => {
     const clientId = event.target.value;
 
     setSelectedClient(clientId);
-
-    // Reset project when client changes
     setSelectedProject("");
   };
-
-  // --------------------------------------------------
-  // CREATE INVOICE
-  // --------------------------------------------------
 
   const handleCreateInvoice = async (
     event: React.FormEvent<HTMLFormElement>
@@ -222,7 +230,9 @@ export default function FreelancerInvoicesPage() {
     }
 
     if (new Date(dueDate) < new Date(issueDate)) {
-      setError("Due date cannot be before the issue date.");
+      setError(
+        "Due date cannot be before the issue date."
+      );
       return;
     }
 
@@ -231,11 +241,9 @@ export default function FreelancerInvoicesPage() {
 
       const response = await fetch("/api/invoices", {
         method: "POST",
-
         headers: {
           "Content-Type": "application/json",
         },
-
         body: JSON.stringify({
           clientId: selectedClient,
           projectId: selectedProject,
@@ -261,10 +269,11 @@ export default function FreelancerInvoicesPage() {
       }
 
       setSuccess(
-        `Invoice ${data.invoice?.invoiceNumber || ""} created successfully.`
+        `Invoice ${
+          data.invoice?.invoiceNumber || ""
+        } created successfully.`
       );
 
-      // Reset form
       setSelectedClient("");
       setSelectedProject("");
       setAmount("");
@@ -273,20 +282,14 @@ export default function FreelancerInvoicesPage() {
 
       setShowForm(false);
 
-      // Reload invoices
       await fetchData();
     } catch (error) {
       console.error(error);
-
       setError("Unable to connect to the server.");
     } finally {
       setCreating(false);
     }
   };
-
-  // --------------------------------------------------
-  // LOGOUT
-  // --------------------------------------------------
 
   const handleLogout = async () => {
     try {
@@ -302,37 +305,50 @@ export default function FreelancerInvoicesPage() {
     router.push("/login");
   };
 
-  // --------------------------------------------------
-  // FORMAT HELPERS
-  // --------------------------------------------------
-
   const formatCurrency = (value: number) => {
-    return `₹${Number(value || 0).toLocaleString("en-IN")}`;
+    return `₹${Number(value || 0).toLocaleString(
+      "en-IN"
+    )}`;
   };
 
   const formatDate = (date: string) => {
     if (!date) return "-";
 
-    return new Date(date).toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
+    return new Date(date).toLocaleDateString(
+      "en-IN",
+      {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }
+    );
   };
 
-  const getClientName = (client: Invoice["client"]) => {
+  const getClientName = (
+    client: Invoice["client"]
+  ) => {
     if (typeof client === "string") {
       const foundClient = clients.find(
         (item) => item._id === client
       );
 
-      return foundClient?.company || foundClient?.name || "Unknown";
+      return (
+        foundClient?.company ||
+        foundClient?.name ||
+        "Unknown"
+      );
     }
 
-    return client?.company || client?.name || "Unknown";
+    return (
+      client?.company ||
+      client?.name ||
+      "Unknown"
+    );
   };
 
-  const getProjectName = (project: Invoice["project"]) => {
+  const getProjectName = (
+    project: Invoice["project"]
+  ) => {
     if (typeof project === "string") {
       const foundProject = projects.find(
         (item) => item._id === project
@@ -363,168 +379,69 @@ export default function FreelancerInvoicesPage() {
     }
   };
 
-  // --------------------------------------------------
-  // FILTER INVOICES
-  // --------------------------------------------------
+  const filteredInvoices = invoices.filter(
+    (invoice) => {
+      const searchText = search.toLowerCase();
 
-  const filteredInvoices = invoices.filter((invoice) => {
-    const searchText = search.toLowerCase();
+      const matchesSearch =
+        invoice.invoiceNumber
+          .toLowerCase()
+          .includes(searchText) ||
+        getClientName(invoice.client)
+          .toLowerCase()
+          .includes(searchText) ||
+        getProjectName(invoice.project)
+          .toLowerCase()
+          .includes(searchText);
 
-    const matchesSearch =
-      invoice.invoiceNumber
-        .toLowerCase()
-        .includes(searchText) ||
-      getClientName(invoice.client)
-        .toLowerCase()
-        .includes(searchText) ||
-      getProjectName(invoice.project)
-        .toLowerCase()
-        .includes(searchText);
+      const matchesStatus =
+        statusFilter === "All" ||
+        invoice.status === statusFilter;
 
-    const matchesStatus =
-      statusFilter === "All" ||
-      invoice.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    }
+  );
 
-    return matchesSearch && matchesStatus;
-  });
+  /*
+    CORRECT FORMULA:
 
-  // --------------------------------------------------
-  // SUMMARY
-  // --------------------------------------------------
+    Total Pending =
+    Sum of pendingAmount for every invoice
+
+    pendingAmount =
+    invoice.amount - completed payments FOR THAT INVOICE
+  */
 
   const totalAmount = invoices.reduce(
-    (total, invoice) => total + Number(invoice.amount || 0),
+    (total, invoice) =>
+      total + Number(invoice.amount || 0),
     0
   );
 
-  const pendingAmount = invoices
-    .filter(
-      (invoice) =>
-        invoice.status === "Pending" ||
-        invoice.status === "Overdue"
-    )
-    .reduce(
-      (total, invoice) =>
-        total + Number(invoice.amount || 0),
-      0
-    );
+  const pendingAmount = invoices.reduce(
+    (total, invoice) =>
+      total + Number(invoice.pendingAmount || 0),
+    0
+  );
 
-  const paidAmount = invoices
-    .filter((invoice) => invoice.status === "Paid")
-    .reduce(
-      (total, invoice) =>
-        total + Number(invoice.amount || 0),
-      0
-    );
-
-  // --------------------------------------------------
-  // PAGE
-  // --------------------------------------------------
+  const paidAmount = invoices.reduce(
+    (total, invoice) =>
+      total + Number(invoice.paidAmount || 0),
+    0
+  );
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-white">
+    <div>
 
       {/* NAVBAR */}
 
-      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
-
-        <div className="flex h-16 items-center justify-between px-6">
-
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold"
-          >
-            Freelancer<span className="text-blue-500">Portal</span>
-          </Link>
-
-          <div className="flex items-center gap-5">
-
-            <span className="text-sm text-gray-300">
-              Freelancer
-            </span>
-
-            <button
-              onClick={handleLogout}
-              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
-            >
-              Logout
-            </button>
-
-          </div>
-
-        </div>
-
-      </header>
 
       {/* SIDEBAR */}
 
-      <aside className="fixed bottom-0 left-0 top-16 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
-
-        <nav className="space-y-2 p-4">
-
-          <Link
-            href="/freelancer/dashboard"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Dashboard
-          </Link>
-
-          <Link
-            href="/freelancer/clients"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Clients
-          </Link>
-
-          <Link
-            href="/freelancer/projects"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Projects
-          </Link>
-
-          <Link
-            href="/freelancer/invoices"
-            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
-          >
-            Invoices
-          </Link>
-
-          <Link
-            href="/freelancer/payments"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Payments
-          </Link>
-
-          <Link
-            href="/freelancer/files"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Files
-          </Link>
-
-          <Link
-            href="/freelancer/messages"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Messages
-          </Link>
-
-          <Link
-            href="/freelancer/reports"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Reports
-          </Link>
-
-        </nav>
-
-      </aside>
 
       {/* MAIN */}
 
-      <main className="pt-16 md:ml-64">
+      <div>
 
         <div className="p-6 md:p-8">
 
@@ -533,7 +450,6 @@ export default function FreelancerInvoicesPage() {
           <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
 
             <div>
-
               <h1 className="text-3xl font-bold">
                 Invoices
               </h1>
@@ -541,7 +457,6 @@ export default function FreelancerInvoicesPage() {
               <p className="mt-2 text-gray-400">
                 Create and manage invoices for your clients.
               </p>
-
             </div>
 
             <button
@@ -552,7 +467,9 @@ export default function FreelancerInvoicesPage() {
               }}
               className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium transition hover:bg-blue-500"
             >
-              {showForm ? "Close Form" : "+ Create Invoice"}
+              {showForm
+                ? "Close Form"
+                : "+ Create Invoice"}
             </button>
 
           </div>
@@ -576,11 +493,9 @@ export default function FreelancerInvoicesPage() {
           {/* CREATE FORM */}
 
           {showForm && (
-
             <div className="mb-8 rounded-xl border border-white/10 bg-[#111827] p-6">
 
               <div className="mb-6">
-
                 <h2 className="text-xl font-semibold">
                   Create New Invoice
                 </h2>
@@ -588,7 +503,6 @@ export default function FreelancerInvoicesPage() {
                 <p className="mt-1 text-sm text-gray-500">
                   Invoice number will be generated automatically.
                 </p>
-
               </div>
 
               <form
@@ -599,7 +513,6 @@ export default function FreelancerInvoicesPage() {
                 {/* CLIENT */}
 
                 <div>
-
                   <label className="mb-2 block text-sm text-gray-400">
                     Client
                   </label>
@@ -609,30 +522,24 @@ export default function FreelancerInvoicesPage() {
                     onChange={handleClientChange}
                     className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
                   >
-
                     <option value="">
                       Select Client
                     </option>
 
                     {clients.map((client) => (
-
                       <option
                         key={client._id}
                         value={client._id}
                       >
                         {client.company} — {client.name}
                       </option>
-
                     ))}
-
                   </select>
-
                 </div>
 
                 {/* PROJECT */}
 
                 <div>
-
                   <label className="mb-2 block text-sm text-gray-400">
                     Project
                   </label>
@@ -645,32 +552,28 @@ export default function FreelancerInvoicesPage() {
                     disabled={!selectedClient}
                     className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-50 focus:border-blue-500"
                   >
-
                     <option value="">
                       {selectedClient
                         ? "Select Project"
                         : "Select a client first"}
                     </option>
 
-                    {availableProjects.map((project) => (
-
-                      <option
-                        key={project._id}
-                        value={project._id}
-                      >
-                        {project.name}
-                      </option>
-
-                    ))}
-
+                    {availableProjects.map(
+                      (project) => (
+                        <option
+                          key={project._id}
+                          value={project._id}
+                        >
+                          {project.name}
+                        </option>
+                      )
+                    )}
                   </select>
-
                 </div>
 
                 {/* AMOUNT */}
 
                 <div>
-
                   <label className="mb-2 block text-sm text-gray-400">
                     Amount (₹)
                   </label>
@@ -686,13 +589,11 @@ export default function FreelancerInvoicesPage() {
                     placeholder="50000"
                     className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none placeholder:text-gray-600 focus:border-blue-500"
                   />
-
                 </div>
 
                 {/* ISSUE DATE */}
 
                 <div>
-
                   <label className="mb-2 block text-sm text-gray-400">
                     Issue Date
                   </label>
@@ -705,13 +606,11 @@ export default function FreelancerInvoicesPage() {
                     }
                     className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
                   />
-
                 </div>
 
                 {/* DUE DATE */}
 
                 <div>
-
                   <label className="mb-2 block text-sm text-gray-400">
                     Due Date
                   </label>
@@ -724,13 +623,11 @@ export default function FreelancerInvoicesPage() {
                     }
                     className="w-full rounded-lg border border-white/10 bg-[#0b0f19] px-4 py-3 text-white outline-none focus:border-blue-500"
                   />
-
                 </div>
 
                 {/* AUTOMATIC NUMBER */}
 
                 <div>
-
                   <label className="mb-2 block text-sm text-gray-400">
                     Invoice Number
                   </label>
@@ -738,7 +635,6 @@ export default function FreelancerInvoicesPage() {
                   <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-gray-400">
                     Automatically generated
                   </div>
-
                 </div>
 
                 {/* BUTTONS */}
@@ -769,29 +665,26 @@ export default function FreelancerInvoicesPage() {
                 </div>
 
               </form>
-
             </div>
-
           )}
 
-          {/* SUMMARY CARDS */}
+          {/* SUMMARY */}
 
           <div className="mb-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
 
             <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
-
               <p className="text-sm text-gray-400">
                 Total Invoices
               </p>
 
               <p className="mt-3 text-3xl font-bold">
-                {loading ? "..." : invoices.length}
+                {loading
+                  ? "..."
+                  : invoices.length}
               </p>
-
             </div>
 
             <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
-
               <p className="text-sm text-gray-400">
                 Total Amount
               </p>
@@ -801,11 +694,9 @@ export default function FreelancerInvoicesPage() {
                   ? "..."
                   : formatCurrency(totalAmount)}
               </p>
-
             </div>
 
             <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
-
               <p className="text-sm text-gray-400">
                 Pending Amount
               </p>
@@ -815,11 +706,9 @@ export default function FreelancerInvoicesPage() {
                   ? "..."
                   : formatCurrency(pendingAmount)}
               </p>
-
             </div>
 
             <div className="rounded-xl border border-white/10 bg-[#111827] p-5">
-
               <p className="text-sm text-gray-400">
                 Paid Amount
               </p>
@@ -829,12 +718,11 @@ export default function FreelancerInvoicesPage() {
                   ? "..."
                   : formatCurrency(paidAmount)}
               </p>
-
             </div>
 
           </div>
 
-          {/* SEARCH + FILTER */}
+          {/* SEARCH */}
 
           <div className="mb-5 flex flex-col gap-4 md:flex-row">
 
@@ -855,7 +743,6 @@ export default function FreelancerInvoicesPage() {
               }
               className="rounded-lg border border-white/10 bg-[#111827] px-4 py-3 text-white outline-none focus:border-blue-500"
             >
-
               <option value="All">
                 All Statuses
               </option>
@@ -875,7 +762,6 @@ export default function FreelancerInvoicesPage() {
               <option value="Overdue">
                 Overdue
               </option>
-
             </select>
 
             <button
@@ -887,31 +773,28 @@ export default function FreelancerInvoicesPage() {
 
           </div>
 
-          {/* INVOICE TABLE */}
+          {/* TABLE */}
 
           <div className="overflow-hidden rounded-xl border border-white/10 bg-[#111827]">
 
             <div className="border-b border-white/10 p-5">
-
               <h2 className="text-lg font-semibold">
                 All Invoices
               </h2>
 
               <p className="mt-1 text-sm text-gray-500">
                 {filteredInvoices.length} invoice
-                {filteredInvoices.length !== 1 ? "s" : ""}
+                {filteredInvoices.length !== 1
+                  ? "s"
+                  : ""}
               </p>
-
             </div>
 
             {loading ? (
-
               <div className="p-8 text-center text-gray-500">
                 Loading invoices...
               </div>
-
             ) : filteredInvoices.length === 0 ? (
-
               <div className="p-10 text-center">
 
                 <div className="text-4xl">
@@ -927,15 +810,12 @@ export default function FreelancerInvoicesPage() {
                 </p>
 
               </div>
-
             ) : (
-
               <div className="overflow-x-auto">
 
                 <table className="w-full">
 
                   <thead>
-
                     <tr className="border-b border-white/10 text-left text-xs uppercase text-gray-500">
 
                       <th className="px-5 py-4">
@@ -955,7 +835,11 @@ export default function FreelancerInvoicesPage() {
                       </th>
 
                       <th className="px-5 py-4">
-                        Issue Date
+                        Paid
+                      </th>
+
+                      <th className="px-5 py-4">
+                        Pending
                       </th>
 
                       <th className="px-5 py-4">
@@ -967,76 +851,83 @@ export default function FreelancerInvoicesPage() {
                       </th>
 
                     </tr>
-
                   </thead>
 
                   <tbody>
 
-                    {filteredInvoices.map((invoice) => (
+                    {filteredInvoices.map(
+                      (invoice) => (
+                        <tr
+                          key={invoice._id}
+                          className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]"
+                        >
 
-                      <tr
-                        key={invoice._id}
-                        className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]"
-                      >
+                          <td className="px-5 py-4">
+                            <p className="font-semibold">
+                              {invoice.invoiceNumber}
+                            </p>
+                          </td>
 
-                        <td className="px-5 py-4">
+                          <td className="px-5 py-4">
+                            <p className="text-sm text-gray-300">
+                              {getClientName(
+                                invoice.client
+                              )}
+                            </p>
+                          </td>
 
-                          <p className="font-semibold">
-                            {invoice.invoiceNumber}
-                          </p>
+                          <td className="px-5 py-4">
+                            <p className="text-sm text-gray-400">
+                              {getProjectName(
+                                invoice.project
+                              )}
+                            </p>
+                          </td>
 
-                        </td>
+                          <td className="px-5 py-4 font-medium">
+                            {formatCurrency(
+                              invoice.amount
+                            )}
+                          </td>
 
-                        <td className="px-5 py-4">
+                          <td className="px-5 py-4 font-medium text-green-400">
+                            {formatCurrency(
+                              invoice.paidAmount
+                            )}
+                          </td>
 
-                          <p className="text-sm text-gray-300">
-                            {getClientName(invoice.client)}
-                          </p>
+                          <td className="px-5 py-4 font-semibold text-yellow-400">
+                            {formatCurrency(
+                              invoice.pendingAmount
+                            )}
+                          </td>
 
-                        </td>
+                          <td className="px-5 py-4 text-sm text-gray-400">
+                            {formatDate(
+                              invoice.dueDate
+                            )}
+                          </td>
 
-                        <td className="px-5 py-4">
+                          <td className="px-5 py-4">
 
-                          <p className="text-sm text-gray-400">
-                            {getProjectName(invoice.project)}
-                          </p>
+                            <span
+                              className={`rounded-full px-3 py-1 text-xs ${getStatusClass(
+                                invoice.status
+                              )}`}
+                            >
+                              {invoice.status}
+                            </span>
 
-                        </td>
+                          </td>
 
-                        <td className="px-5 py-4 font-medium">
-                          {formatCurrency(invoice.amount)}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-gray-400">
-                          {formatDate(invoice.issueDate)}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-gray-400">
-                          {formatDate(invoice.dueDate)}
-                        </td>
-
-                        <td className="px-5 py-4">
-
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs ${getStatusClass(
-                              invoice.status
-                            )}`}
-                          >
-                            {invoice.status}
-                          </span>
-
-                        </td>
-
-                      </tr>
-
-                    ))}
+                        </tr>
+                      )
+                    )}
 
                   </tbody>
 
                 </table>
-
               </div>
-
             )}
 
           </div>
@@ -1048,9 +939,7 @@ export default function FreelancerInvoicesPage() {
           </div>
 
         </div>
-
-      </main>
-
+      </div>
     </div>
   );
 }

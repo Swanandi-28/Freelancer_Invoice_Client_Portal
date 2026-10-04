@@ -9,6 +9,9 @@ type ReportData = {
     totalProjects: number;
     activeProjects: number;
     completedProjects: number;
+    totalProjectBudget: number;
+    uninvoicedBudget: number;
+    overdueAmount: number;
     totalInvoicedAmount: number;
     paidInvoiceAmount: number;
     pendingAmount: number;
@@ -25,6 +28,9 @@ type ReportData = {
     id: string;
     name: string;
     budget: number;
+    invoiced: number;
+    paid: number;
+    pending: number;
     status: string;
     client: string;
   }[];
@@ -113,7 +119,7 @@ export default function ReportsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center">
+      <div className="min-h-[60vh] text-white flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4" />
           <p className="text-gray-400">Loading reports...</p>
@@ -124,8 +130,8 @@ export default function ReportsPage() {
 
   if (error || !data) {
     return (
-      <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md bg-[#111113] border border-white/10 rounded-2xl p-8 text-center">
+      <div className="min-h-[60vh] text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-[#111827] border border-white/10 rounded-2xl p-8 text-center">
           <div className="text-4xl mb-4">⚠️</div>
 
           <h1 className="text-xl font-semibold mb-2">
@@ -148,95 +154,13 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-white">
+    <div>
       {/* TOP NAVBAR */}
-      <header className="fixed top-0 left-0 right-0 h-16 bg-[#0d0d0f]/95 backdrop-blur border-b border-white/10 z-50">
-        <div className="h-full px-6 flex items-center justify-between">
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold tracking-tight"
-          >
-            Freelancer<span className="text-gray-400">Portal</span>
-          </Link>
-
-          <div className="flex items-center gap-4">
-            <span className="hidden sm:block text-sm text-gray-400">
-              Reports
-            </span>
-
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 text-sm rounded-lg border border-white/10 hover:bg-white/5 transition"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
 
       {/* SIDEBAR */}
-      <aside className="fixed top-16 left-0 bottom-0 w-64 bg-[#0d0d0f] border-r border-white/10 hidden md:block">
-        <nav className="p-4 space-y-1">
-          <Link
-            href="/freelancer/dashboard"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            📊 Dashboard
-          </Link>
-
-          <Link
-            href="/freelancer/clients"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            👥 Clients
-          </Link>
-
-          <Link
-            href="/freelancer/projects"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            📁 Projects
-          </Link>
-
-          <Link
-            href="/freelancer/invoices"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            🧾 Invoices
-          </Link>
-
-          <Link
-            href="/freelancer/payments"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            💳 Payments
-          </Link>
-
-          <Link
-            href="/freelancer/files"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            📎 Files
-          </Link>
-
-          <Link
-            href="/freelancer/messages"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            💬 Messages
-          </Link>
-
-          <Link
-            href="/freelancer/reports"
-            className="block px-4 py-3 rounded-lg bg-white/10 text-white"
-          >
-            📈 Reports
-          </Link>
-        </nav>
-      </aside>
 
       {/* MAIN CONTENT */}
-      <main className="md:ml-64 pt-16 min-h-screen">
+      <div>
         <div className="p-6 md:p-8 max-w-7xl mx-auto">
           {/* HEADER */}
           <div className="mb-8">
@@ -256,7 +180,7 @@ export default function ReportsPage() {
           {/* SUMMARY CARDS */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             {/* Revenue */}
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
               <div className="text-2xl mb-3">💰</div>
 
               <p className="text-sm text-gray-500">
@@ -273,7 +197,7 @@ export default function ReportsPage() {
             </div>
 
             {/* Invoiced */}
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
               <div className="text-2xl mb-3">🧾</div>
 
               <p className="text-sm text-gray-500">
@@ -287,16 +211,16 @@ export default function ReportsPage() {
               </p>
 
               <p className="text-xs text-gray-500 mt-2">
-                Across all invoices
+                Across all active invoices
               </p>
             </div>
 
             {/* Pending */}
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
               <div className="text-2xl mb-3">⏳</div>
 
               <p className="text-sm text-gray-500">
-                Pending Amount
+                Pending Invoice Amount
               </p>
 
               <p className="text-2xl font-bold mt-1">
@@ -306,12 +230,12 @@ export default function ReportsPage() {
               </p>
 
               <p className="text-xs text-yellow-400 mt-2">
-                Pending + overdue invoices
+                Invoice amounts − completed payments
               </p>
             </div>
 
             {/* Projects */}
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
               <div className="text-2xl mb-3">📁</div>
 
               <p className="text-sm text-gray-500">
@@ -330,7 +254,7 @@ export default function ReportsPage() {
           </div>
 
           {/* REVENUE CHART */}
-          <section className="bg-[#111113] border border-white/10 rounded-2xl p-6 mb-8">
+          <section className="bg-[#111827] border border-white/10 rounded-2xl p-6 mb-8">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h2 className="text-lg font-semibold">
@@ -392,7 +316,7 @@ export default function ReportsPage() {
           {/* TWO COLUMN SECTION */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             {/* INVOICE BREAKDOWN */}
-            <section className="bg-[#111113] border border-white/10 rounded-2xl p-6">
+            <section className="bg-[#111827] border border-white/10 rounded-2xl p-6">
               <div className="mb-6">
                 <h2 className="text-lg font-semibold">
                   Invoice Breakdown
@@ -459,7 +383,7 @@ export default function ReportsPage() {
             </section>
 
             {/* PAYMENT METHODS */}
-            <section className="bg-[#111113] border border-white/10 rounded-2xl p-6">
+            <section className="bg-[#111827] border border-white/10 rounded-2xl p-6">
               <div className="mb-6">
                 <h2 className="text-lg font-semibold">
                   Payment Methods
@@ -514,7 +438,7 @@ export default function ReportsPage() {
           </div>
 
           {/* PROJECT PERFORMANCE */}
-          <section className="bg-[#111113] border border-white/10 rounded-2xl overflow-hidden mb-8">
+          <section className="bg-[#111827] border border-white/10 rounded-2xl overflow-hidden mb-8">
             <div className="p-6 border-b border-white/10">
               <h2 className="text-lg font-semibold">
                 Project Performance
@@ -542,9 +466,10 @@ export default function ReportsPage() {
                         Client
                       </th>
 
-                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">
-                        Budget
-                      </th>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">Budget</th>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">Invoiced</th>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">Paid</th>
+                      <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">Pending</th>
 
                       <th className="px-6 py-4 text-xs font-medium text-gray-500 uppercase">
                         Status
@@ -574,6 +499,18 @@ export default function ReportsPage() {
                           </td>
 
                           <td className="px-6 py-4">
+                            {formatCurrency(project.invoiced)}
+                          </td>
+
+                          <td className="px-6 py-4 text-green-400">
+                            {formatCurrency(project.paid)}
+                          </td>
+
+                          <td className="px-6 py-4 text-yellow-400">
+                            {formatCurrency(project.pending)}
+                          </td>
+
+                          <td className="px-6 py-4">
                             <span
                               className={`inline-flex px-3 py-1 rounded-full text-xs ${
                                 project.status ===
@@ -598,7 +535,7 @@ export default function ReportsPage() {
           </section>
 
           {/* BUSINESS SUMMARY */}
-          <section className="bg-[#111113] border border-white/10 rounded-2xl p-6">
+          <section className="bg-[#111827] border border-white/10 rounded-2xl p-6">
             <h2 className="text-lg font-semibold mb-6">
               Business Summary
             </h2>
@@ -616,7 +553,7 @@ export default function ReportsPage() {
 
               <div>
                 <p className="text-sm text-gray-500">
-                  Paid Invoice Value
+                  Paid on Invoices
                 </p>
 
                 <p className="text-xl font-semibold mt-1">
@@ -628,13 +565,43 @@ export default function ReportsPage() {
 
               <div>
                 <p className="text-sm text-gray-500">
-                  Pending Payments
+                  Payments Awaiting Confirmation
                 </p>
 
                 <p className="text-xl font-semibold mt-1">
                   {formatCurrency(
                     data.summary.pendingPaymentAmount
                   )}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Total Project Budget
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {formatCurrency(data.summary.totalProjectBudget)}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Budget Not Yet Invoiced
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {formatCurrency(data.summary.uninvoicedBudget)}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Overdue Amount
+                </p>
+
+                <p className="text-xl font-semibold mt-1">
+                  {formatCurrency(data.summary.overdueAmount)}
                 </p>
               </div>
 
@@ -650,7 +617,7 @@ export default function ReportsPage() {
             </div>
           </section>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

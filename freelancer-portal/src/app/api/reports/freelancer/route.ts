@@ -1,318 +1,156 @@
 import { NextResponse } from "next/server";
 
-import connectDB from "@/lib/mongodb";
 import Client from "@/models/Client";
 import Project from "@/models/Project";
 import Invoice from "@/models/Invoice";
 import Payment from "@/models/Payment";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { requireUser } from "@/lib/access";
+import { sum, withInvoiceAmounts, withProjectAmounts } from "@/lib/finance";
+import { roundMoney, serverError } from "@/lib/api";
 
+/*
+  DEFINITIONS USED IN THIS REPORT
+
+  Project Budget          total agreed value of projects (Project.budget)
+  Invoiced Amount         sum of Invoice.amount for active (non-draft) invoices
+  Paid Amount             completed payments recorded against those invoices
+  Pending Invoice Amount  for each invoice: amount - completed payments of
+                          THAT invoice, summed (never below 0)
+  Revenue                 all completed payments received
+  Uninvoiced Budget       project budget that has not been invoiced yet
+  Pending Project Amount  for each project: budget - completed payments of
+                          THAT project, summed (never below 0)
+*/
 export async function GET() {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser("freelancer");
+    if (auth.response) return auth.response;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
+    const freelancerId = auth.user.id;
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can access reports.",
-        },
-        { status: 403 }
-      );
-    }
+    const [totalClients, rawProjects, rawInvoices, payments] = await Promise.all([
+      Client.countDocuments({ freelancer: freelancerId }),
+      Project.find({ freelancer: freelancerId })
+        .populate("client", "name company")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Invoice.find({ freelancer: freelancerId }).sort({ createdAt: -1 }).lean(),
+      Payment.find({ freelancer: freelancerId }).sort({ paymentDate: -1 }).lean(),
+    ]);
 
-    await connectDB();
-
-    const freelancerId = user.id;
-
-    // -----------------------------
-    // CLIENTS
-    // -----------------------------
-
-    const totalClients = await Client.countDocuments({
-      freelancer: freelancerId,
-    });
-
-    // -----------------------------
-    // PROJECTS
-    // -----------------------------
-
-    const projects = await Project.find({
-      freelancer: freelancerId,
-    })
-      .populate("client", "name company")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const totalProjects = projects.length;
-
-    const activeProjects = projects.filter(
-      (project) => project.status === "In Progress"
-    ).length;
-
-    const completedProjects = projects.filter(
-      (project) => project.status === "Completed"
-    ).length;
-
-    // Total value of all projects
-    const totalProjectBudget = projects.reduce(
-      (total, project) =>
-        total + Number(project.budget || 0),
-      0
-    );
-
-    // -----------------------------
-    // INVOICES
-    // -----------------------------
-
-    const invoices = await Invoice.find({
-      freelancer: freelancerId,
-    })
-      .populate("client", "name company")
-      .populate("project", "name")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const totalInvoicedAmount = invoices.reduce(
-      (total, invoice) =>
-        total + Number(invoice.amount || 0),
-      0
-    );
-
-    const paidInvoices = invoices.filter(
-      (invoice) => invoice.status === "Paid"
-    );
-
-    const paidInvoiceAmount = paidInvoices.reduce(
-      (total, invoice) =>
-        total + Number(invoice.amount || 0),
-      0
-    );
-
-    // -----------------------------
-    // PAYMENTS
-    // -----------------------------
-
-    const payments = await Payment.find({
-      freelancer: freelancerId,
-    })
-      .populate("client", "name company")
-      .populate("project", "name")
-      .populate("invoice", "invoiceNumber")
-      .sort({ paymentDate: -1 })
-      .lean();
+    const projects = await withProjectAmounts(rawProjects);
+    const invoices = await withInvoiceAmounts(rawInvoices);
+    const activeInvoices = invoices.filter((invoice) => invoice.status !== "Draft");
 
     const completedPayments = payments.filter(
       (payment) => payment.status === "Completed"
     );
 
-    const totalRevenue = completedPayments.reduce(
-      (total, payment) =>
-        total + Number(payment.amount || 0),
+    // ---------- Summary ----------
+    const totalProjectBudget = sum(projects.map((project) => project.budget));
+    const totalInvoicedAmount = sum(activeInvoices.map((invoice) => invoice.amount));
+    const paidInvoiceAmount = sum(activeInvoices.map((invoice) => invoice.paidAmount));
+    const pendingAmount = sum(activeInvoices.map((invoice) => invoice.pendingAmount));
+    const overdueAmount = sum(
+      activeInvoices
+        .filter((invoice) => invoice.status === "Overdue")
+        .map((invoice) => invoice.pendingAmount)
+    );
+    const totalRevenue = sum(completedPayments.map((payment) => payment.amount));
+    const pendingPaymentAmount = sum(
+      payments
+        .filter((payment) => payment.status === "Pending")
+        .map((payment) => payment.amount)
+    );
+    const uninvoicedBudget = Math.max(
+      roundMoney(totalProjectBudget - totalInvoicedAmount),
       0
     );
 
-    const pendingPayments = payments.filter(
-      (payment) => payment.status === "Pending"
-    );
+    // ---------- Monthly revenue (last 6 months with payments) ----------
+    const monthly = new Map<string, { label: string; revenue: number }>();
 
-    const pendingPaymentAmount = pendingPayments.reduce(
-      (total, payment) =>
-        total + Number(payment.amount || 0),
-      0
-    );
-
-    // -----------------------------
-    // REMAINING PROJECT BALANCE
-    // -----------------------------
-
-    /*
-      Example:
-
-      Project Budget = ₹50,000
-      Completed Payments = ₹20,000
-
-      Remaining Balance = ₹50,000 - ₹20,000
-                        = ₹30,000
-    */
-
-    const pendingAmount = Math.max(
-      totalProjectBudget - totalRevenue,
-      0
-    );
-
-    // -----------------------------
-    // MONTHLY REVENUE
-    // -----------------------------
-
-    const monthlyRevenueMap: Record<string, number> = {};
-
-    completedPayments.forEach((payment) => {
+    for (const payment of completedPayments) {
       const date = new Date(payment.paymentDate);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const label = `${date.toLocaleString("en-US", { month: "short" })} ${date.getFullYear()}`;
+      const entry = monthly.get(key) || { label, revenue: 0 };
+      entry.revenue = roundMoney(entry.revenue + Number(payment.amount || 0));
+      monthly.set(key, entry);
+    }
 
-      const month = date.toLocaleString("en-US", {
-        month: "short",
-      });
+    const monthlyRevenue = [...monthly.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([, entry]) => ({ month: entry.label, revenue: entry.revenue }));
 
-      const year = date.getFullYear();
-
-      const key = `${month} ${year}`;
-
-      if (!monthlyRevenueMap[key]) {
-        monthlyRevenueMap[key] = 0;
-      }
-
-      monthlyRevenueMap[key] += Number(
-        payment.amount || 0
+    // ---------- Project performance (per project, from its own invoices) ----------
+    const projectPerformance = projects.map((project) => {
+      const projectInvoices = activeInvoices.filter(
+        (invoice) => invoice.project.toString() === project._id.toString()
       );
-    });
+      const client = project.client as unknown as {
+        name?: string;
+        company?: string;
+      } | null;
 
-    const monthlyRevenue = Object.entries(
-      monthlyRevenueMap
-    )
-      .map(([month, revenue]) => ({
-        month,
-        revenue,
-      }))
-      .sort((a, b) => {
-        const dateA = new Date(`1 ${a.month}`);
-        const dateB = new Date(`1 ${b.month}`);
-
-        return dateA.getTime() - dateB.getTime();
-      })
-      .slice(-6);
-
-    // -----------------------------
-    // PROJECT PERFORMANCE
-    // -----------------------------
-
-    const projectPerformance = projects.map(
-      (project) => ({
+      return {
         id: project._id.toString(),
-
         name: project.name,
-
-        budget: Number(project.budget || 0),
-
+        budget: project.budget,
         status: project.status,
-
-        client:
-          typeof project.client === "object" &&
-          project.client !== null
-            ? (project.client as any).company ||
-              (project.client as any).name ||
-              "Client"
-            : "Client",
-      })
-    );
-
-    // -----------------------------
-    // INVOICE STATUS BREAKDOWN
-    // -----------------------------
-
-    const invoiceBreakdown = {
-      Draft: invoices.filter(
-        (invoice) => invoice.status === "Draft"
-      ).length,
-
-      Pending: invoices.filter(
-        (invoice) => invoice.status === "Pending"
-      ).length,
-
-      Paid: invoices.filter(
-        (invoice) => invoice.status === "Paid"
-      ).length,
-
-      Overdue: invoices.filter(
-        (invoice) => invoice.status === "Overdue"
-      ).length,
-    };
-
-    // -----------------------------
-    // PAYMENT METHOD BREAKDOWN
-    // -----------------------------
-
-    const paymentMethodMap: Record<string, number> = {};
-
-    completedPayments.forEach((payment) => {
-      const method =
-        payment.paymentMethod || "Other";
-
-      if (!paymentMethodMap[method]) {
-        paymentMethodMap[method] = 0;
-      }
-
-      paymentMethodMap[method] += Number(
-        payment.amount || 0
-      );
+        client: client?.company || client?.name || "Client",
+        invoiced: sum(projectInvoices.map((invoice) => invoice.amount)),
+        // Project level: completed payments of this project, and
+        // pending = budget - those payments.
+        paid: project.paidAmount,
+        pending: project.pendingAmount,
+        // Invoice level: unpaid balance of this project's issued invoices.
+        invoicePending: sum(projectInvoices.map((invoice) => invoice.pendingAmount)),
+      };
     });
 
-    const paymentMethods = Object.entries(
-      paymentMethodMap
-    ).map(([method, amount]) => ({
-      method,
-      amount,
-    }));
+    // ---------- Invoice status breakdown ----------
+    const invoiceBreakdown = { Draft: 0, Pending: 0, Paid: 0, Overdue: 0 };
+    for (const invoice of invoices) {
+      invoiceBreakdown[invoice.status] += 1;
+    }
 
-    // -----------------------------
-    // RESPONSE
-    // -----------------------------
+    // ---------- Payment methods ----------
+    const methods = new Map<string, number>();
+    for (const payment of completedPayments) {
+      const method = payment.paymentMethod || "Other";
+      methods.set(method, roundMoney((methods.get(method) || 0) + Number(payment.amount || 0)));
+    }
 
     return NextResponse.json({
       success: true,
-
       summary: {
         totalClients,
-
-        totalProjects,
-
-        activeProjects,
-
-        completedProjects,
-
+        totalProjects: projects.length,
+        activeProjects: projects.filter((project) => project.status === "In Progress").length,
+        completedProjects: projects.filter((project) => project.status === "Completed").length,
         totalProjectBudget,
-
+        uninvoicedBudget,
+        totalInvoices: invoices.length,
         totalInvoicedAmount,
-
         paidInvoiceAmount,
-
         pendingAmount,
-
+        // Sum over projects of (budget - completed payments of that project)
+        pendingProjectAmount: sum(projects.map((project) => project.pendingAmount)),
+        overdueAmount,
         totalRevenue,
-
         pendingPaymentAmount,
       },
-
       monthlyRevenue,
-
       projectPerformance,
-
       invoiceBreakdown,
-
-      paymentMethods,
+      paymentMethods: [...methods.entries()].map(([method, amount]) => ({
+        method,
+        amount,
+      })),
     });
   } catch (error) {
-    console.error(
-      "Freelancer reports error:",
-      error
-    );
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to load reports.",
-      },
-      { status: 500 }
-    );
+    return serverError("Freelancer reports error", error, "Failed to load reports.");
   }
 }

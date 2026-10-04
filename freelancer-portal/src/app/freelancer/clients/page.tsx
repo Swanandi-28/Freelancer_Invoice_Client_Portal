@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import ConfirmDialog from "@/components/ConfirmDialog";
+
 interface Client {
   _id?: string;
   name: string;
@@ -10,6 +12,7 @@ interface Client {
   email: string;
   projects: number;
   revenue: number;
+  pendingAmount: number;
   status: string;
 }
 
@@ -24,52 +27,56 @@ export default function ClientsPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [pageLoading, setPageLoading] = useState(true);
 
-  // Get logged-in freelancer
-  const getUser = () => {
-    if (typeof window === "undefined") return null;
-
-    const user = localStorage.getItem("user");
-
-    if (!user) return null;
-
-    try {
-      return JSON.parse(user);
-    } catch {
-      return null;
-    }
-  };
+  // Delete client (confirmation dialog)
+  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   // Load clients from MongoDB
   const loadClients = async () => {
-    const user = getUser();
+  try {
+    // Project counts, revenue and pending amounts are calculated
+    // by the server from MongoDB.
+    const clientsResponse = await fetch("/api/clients", {
+      credentials: "include",
+      cache: "no-store",
+    });
 
-    if (!user?.id) {
+    const clientsData = await clientsResponse.json();
+
+    if (!clientsResponse.ok) {
+      setMessage(
+        clientsData.message || "Failed to load clients."
+      );
       return;
     }
 
-    try {
-      const response = await fetch("/api/clients");
+    const formattedClients: Client[] = (
+      clientsData.clients || []
+    ).map((client: Client & { projectCount?: number; isConnected?: boolean }) => ({
+      ...client,
+      projects: client.projectCount || 0,
+      revenue: client.revenue || 0,
+      pendingAmount: client.pendingAmount || 0,
+      status: client.isConnected ? "Connected" : "Not registered",
+    }));
 
-      const data = await response.json();
+    setClients(formattedClients);
+  } catch (error) {
+    console.error(
+      "Failed to load clients:",
+      error
+    );
 
-      if (data.success) {
-        const formattedClients = data.clients.map(
-          (client: Client) => ({
-            ...client,
-            projects: 0,
-            revenue: 0,
-            status: "Active",
-          })
-        );
-
-        setClients(formattedClients);
-      }
-    } catch (error) {
-      console.error("Failed to load clients:", error);
-    }
-  };
-
+    setMessage(
+      "Unable to load clients from the server."
+    );
+  } finally {
+    setPageLoading(false);
+  }
+};
   useEffect(() => {
     loadClients();
   }, []);
@@ -81,13 +88,6 @@ export default function ClientsPage() {
     e.preventDefault();
 
     setMessage("");
-
-    const user = getUser();
-
-    if (!user?.id) {
-      setMessage("Please login first.");
-      return;
-    }
 
     try {
       setLoading(true);
@@ -111,7 +111,7 @@ export default function ClientsPage() {
         return;
       }
 
-      setMessage("Client added successfully.");
+      setMessage(data.message || "Client added successfully.");
 
       setName("");
       setCompany("");
@@ -127,6 +127,38 @@ export default function ClientsPage() {
     }
   };
 
+  // Delete client relationship + all of its data (after confirmation)
+  const handleDeleteClient = async () => {
+    if (!deleteTarget?._id) return;
+
+    try {
+      setDeleting(true);
+      setDeleteError("");
+
+      const response = await fetch(`/api/clients/${deleteTarget._id}`, {
+        method: "DELETE",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setDeleteError(data.message || "Failed to delete client.");
+        return;
+      }
+
+      setMessage(data.message || "Client deleted successfully.");
+      setDeleteTarget(null);
+
+      // Reload from MongoDB so counts, revenue and pending are up to date.
+      await loadClients();
+    } catch (error) {
+      console.error(error);
+      setDeleteError("Unable to connect to the server.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // Search
   const filteredClients = clients.filter((client) => {
     const searchText = search.toLowerCase();
@@ -139,98 +171,19 @@ export default function ClientsPage() {
   });
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <div>
 
       {/* Navbar */}
-      <nav className="border-b border-slate-800 bg-slate-900">
-        <div className="flex items-center justify-between px-6 py-4">
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold text-blue-400"
-          >
-            FreelancerPortal
-          </Link>
-
-          <Link
-            href="/freelancer/dashboard"
-            className="text-sm text-slate-400 hover:text-white"
-          >
-            Dashboard
-          </Link>
-        </div>
-      </nav>
 
       <div className="flex">
 
         {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-73px)] border-r border-slate-800 bg-slate-900 p-5">
-
-          <div className="space-y-2">
-
-            <Link
-              href="/freelancer/dashboard"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/freelancer/clients"
-              className="block px-4 py-3 rounded-lg bg-blue-600"
-            >
-              Clients
-            </Link>
-
-            <Link
-              href="/freelancer/projects"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Projects
-            </Link>
-
-            <Link
-              href="/freelancer/invoices"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Invoices
-            </Link>
-
-            <Link
-              href="/freelancer/payments"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Payments
-            </Link>
-
-            <Link
-              href="/freelancer/files"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Files
-            </Link>
-
-            <Link
-              href="/freelancer/messages"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Messages
-            </Link>
-
-            <Link
-              href="/freelancer/reports"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Reports
-            </Link>
-
-          </div>
-        </aside>
 
         {/* Main */}
-        <section className="flex-1 p-8">
+        <section className="flex-1 min-w-0 p-4 md:p-8">
 
           {/* Heading */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
 
             <div>
               <h1 className="text-3xl font-bold">
@@ -262,7 +215,7 @@ export default function ClientsPage() {
           {showForm && (
             <form
               onSubmit={handleAddClient}
-              className="mb-8 bg-slate-900 border border-slate-800 rounded-xl p-6"
+              className="mb-8 bg-[#111827] border border-white/10 rounded-xl p-6"
             >
 
               <h2 className="text-xl font-semibold mb-5">
@@ -279,7 +232,7 @@ export default function ClientsPage() {
                     setName(e.target.value)
                   }
                   required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 />
 
                 <input
@@ -290,7 +243,7 @@ export default function ClientsPage() {
                     setCompany(e.target.value)
                   }
                   required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 />
 
                 <input
@@ -301,7 +254,7 @@ export default function ClientsPage() {
                     setEmail(e.target.value)
                   }
                   required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 />
 
               </div>
@@ -319,7 +272,7 @@ export default function ClientsPage() {
                 <button
                   type="button"
                   onClick={() => setShowForm(false)}
-                  className="px-5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700"
+                  className="px-5 py-2.5 rounded-lg bg-white/10 hover:bg-white/20"
                 >
                   Cancel
                 </button>
@@ -339,19 +292,19 @@ export default function ClientsPage() {
               onChange={(e) =>
                 setSearch(e.target.value)
               }
-              className="w-full max-w-md px-4 py-3 rounded-lg bg-slate-900 border border-slate-800 outline-none focus:border-blue-500"
+              className="w-full max-w-md px-4 py-3 rounded-lg bg-[#111827] border border-white/10 outline-none focus:border-blue-500"
             />
 
           </div>
 
           {/* Clients */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div className="bg-[#111827] border border-white/10 rounded-xl overflow-hidden">
 
             <div className="overflow-x-auto">
 
               <table className="w-full">
 
-                <thead className="bg-slate-800">
+                <thead className="bg-white/5">
 
                   <tr>
                     <th className="text-left px-6 py-4">
@@ -370,12 +323,15 @@ export default function ClientsPage() {
                       Projects
                     </th>
 
-                    <th className="text-left px-6 py-4">
-                      Revenue
-                    </th>
+                    <th className="text-left px-6 py-4">Revenue</th>
+                    <th className="text-left px-6 py-4">Pending</th>
 
                     <th className="text-left px-6 py-4">
                       Status
+                    </th>
+
+                    <th className="text-left px-6 py-4">
+                      Actions
                     </th>
                   </tr>
 
@@ -387,10 +343,14 @@ export default function ClientsPage() {
 
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={8}
                         className="text-center px-6 py-12 text-slate-400"
                       >
-                        No clients found.
+                        {pageLoading
+                          ? "Loading clients..."
+                          : clients.length === 0
+                            ? "No clients yet. Add your first client."
+                            : "No clients match your search."}
                       </td>
                     </tr>
 
@@ -400,7 +360,7 @@ export default function ClientsPage() {
 
                       <tr
                         key={client._id}
-                        className="border-t border-slate-800 hover:bg-slate-800/50"
+                        className="border-t border-white/10 hover:bg-white/5"
                       >
 
                         <td className="px-6 py-4 font-medium">
@@ -420,13 +380,39 @@ export default function ClientsPage() {
                         </td>
 
                         <td className="px-6 py-4">
-                          ₹{client.revenue.toLocaleString()}
+                          ₹{client.revenue.toLocaleString("en-IN")}
+                        </td>
+                        <td className="px-6 py-4">
+                          ₹{client.pendingAmount.toLocaleString("en-IN")}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span
+                            title={
+                              client.status === "Connected"
+                                ? "This client has an account and can log in to see their workspace."
+                                : "This client has not registered yet. They can register with this email to connect."
+                            }
+                            className={`px-3 py-1 rounded-full text-xs whitespace-nowrap ${
+                              client.status === "Connected"
+                                ? "bg-green-500/10 text-green-400"
+                                : "bg-yellow-500/10 text-yellow-400"
+                            }`}
+                          >
+                            {client.status}
+                          </span>
                         </td>
 
                         <td className="px-6 py-4">
-                          <span className="px-3 py-1 rounded-full text-xs bg-green-500/10 text-green-400">
-                            {client.status}
-                          </span>
+                          <button
+                            onClick={() => {
+                              setDeleteError("");
+                              setMessage("");
+                              setDeleteTarget(client);
+                            }}
+                            className="px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 text-xs whitespace-nowrap hover:bg-red-500/10 transition"
+                          >
+                            Delete Client
+                          </button>
                         </td>
 
                       </tr>
@@ -447,6 +433,35 @@ export default function ClientsPage() {
 
       </div>
 
-    </main>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete Client"
+          confirmLabel="Delete Client"
+          busy={deleting}
+          error={deleteError}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={handleDeleteClient}
+        >
+          <p>Are you sure you want to delete:</p>
+          <p className="mt-2 font-semibold text-white">
+            {deleteTarget.company || deleteTarget.name}
+          </p>
+          <p className="mt-4">This will permanently remove:</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            <li>Client relationship</li>
+            <li>Projects</li>
+            <li>Invoices</li>
+            <li>Payments</li>
+            <li>Files</li>
+            <li>Messages</li>
+          </ul>
+          <p className="mt-4 text-gray-400">
+            The client&apos;s login account will NOT be deleted. This action
+            cannot be undone.
+          </p>
+        </ConfirmDialog>
+      )}
+
+    </div>
   );
 }

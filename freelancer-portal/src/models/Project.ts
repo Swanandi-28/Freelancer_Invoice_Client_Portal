@@ -3,27 +3,34 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 export interface IProject extends Document {
   freelancer: mongoose.Types.ObjectId;
   client: mongoose.Types.ObjectId;
+
   name: string;
   description: string;
   budget: number;
   deadline: Date;
+
   status: "In Progress" | "Completed" | "Pending";
+
   createdAt: Date;
   updatedAt: Date;
 }
 
 const ProjectSchema = new Schema<IProject>(
   {
+    // Freelancer responsible for the project
     freelancer: {
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
 
+    // Specific freelancer-client relationship
     client: {
       type: Schema.Types.ObjectId,
       ref: "Client",
       required: true,
+      index: true,
     },
 
     name: {
@@ -35,6 +42,7 @@ const ProjectSchema = new Schema<IProject>(
     description: {
       type: String,
       default: "",
+      trim: true,
     },
 
     budget: {
@@ -50,7 +58,11 @@ const ProjectSchema = new Schema<IProject>(
 
     status: {
       type: String,
-      enum: ["In Progress", "Completed", "Pending"],
+      enum: [
+        "In Progress",
+        "Completed",
+        "Pending",
+      ],
       default: "Pending",
     },
   },
@@ -58,6 +70,11 @@ const ProjectSchema = new Schema<IProject>(
     timestamps: true,
   }
 );
+
+ProjectSchema.index({
+  freelancer: 1,
+  client: 1,
+});
 
 const Project: Model<IProject> =
   mongoose.models.Project ||

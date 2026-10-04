@@ -28,6 +28,7 @@ type UploadedFile = {
   fileName: string;
   originalName: string;
   fileUrl: string;
+  downloadUrl?: string;
   fileSize: number;
   fileType: string;
   createdAt: string;
@@ -418,111 +419,17 @@ export default function FreelancerFilesPage() {
   // =====================================================
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-white">
+    <div>
 
       {/* NAVBAR */}
 
-      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#0b0f19]/95 backdrop-blur">
-
-        <div className="flex h-16 items-center justify-between px-6">
-
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold"
-          >
-            Freelancer<span className="text-blue-500">
-              Portal
-            </span>
-          </Link>
-
-          <div className="flex items-center gap-5">
-
-            <span className="text-sm text-gray-300">
-              Freelancer
-            </span>
-
-            <button
-              onClick={handleLogout}
-              className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/10"
-            >
-              Logout
-            </button>
-
-          </div>
-
-        </div>
-
-      </header>
 
       {/* SIDEBAR */}
 
-      <aside className="fixed bottom-0 left-0 top-16 hidden w-64 border-r border-white/10 bg-[#0f1420] md:block">
-
-        <nav className="space-y-2 p-4">
-
-          <Link
-            href="/freelancer/dashboard"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Dashboard
-          </Link>
-
-          <Link
-            href="/freelancer/clients"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Clients
-          </Link>
-
-          <Link
-            href="/freelancer/projects"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Projects
-          </Link>
-
-          <Link
-            href="/freelancer/invoices"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Invoices
-          </Link>
-
-          <Link
-            href="/freelancer/payments"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Payments
-          </Link>
-
-          <Link
-            href="/freelancer/files"
-            className="block rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium"
-          >
-            Files
-          </Link>
-
-          <Link
-            href="/freelancer/messages"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Messages
-          </Link>
-
-          <Link
-            href="/freelancer/reports"
-            className="block rounded-lg px-4 py-3 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
-          >
-            Reports
-          </Link>
-
-        </nav>
-
-      </aside>
 
       {/* MAIN */}
 
-      <main className="pt-16 md:ml-64">
+      <div>
 
         <div className="p-6 md:p-8">
 
@@ -879,7 +786,7 @@ export default function FreelancerFilesPage() {
                   <div className="mt-5 border-t border-white/10 pt-4">
 
                     <a
-                      href={file.fileUrl}
+                      href={file.downloadUrl || `/api/files/${file._id}/download`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="block w-full rounded-lg bg-white/5 px-4 py-2.5 text-center text-sm font-medium text-blue-400 transition hover:bg-white/10"
@@ -906,7 +813,7 @@ export default function FreelancerFilesPage() {
 
         </div>
 
-      </main>
+      </div>
 
     </div>
   );

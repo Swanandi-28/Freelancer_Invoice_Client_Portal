@@ -2,8 +2,6 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface IClient extends Document {
   freelancer: mongoose.Types.ObjectId;
-
-  // Links this client record to the client's login account
   user?: mongoose.Types.ObjectId;
 
   name: string;
@@ -16,16 +14,20 @@ export interface IClient extends Document {
 
 const ClientSchema = new Schema<IClient>(
   {
+    // Freelancer who owns this client relationship
     freelancer: {
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
 
+    // Client's login account
     user: {
       type: Schema.Types.ObjectId,
       ref: "User",
       required: false,
+      index: true,
     },
 
     name: {
@@ -45,10 +47,22 @@ const ClientSchema = new Schema<IClient>(
       required: true,
       lowercase: true,
       trim: true,
+      index: true,
     },
   },
   {
     timestamps: true,
+  }
+);
+
+// A freelancer cannot have the same client email twice.
+ClientSchema.index(
+  {
+    freelancer: 1,
+    email: 1,
+  },
+  {
+    unique: true,
   }
 );
 

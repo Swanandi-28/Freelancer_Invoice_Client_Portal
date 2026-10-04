@@ -3,14 +3,21 @@ import bcrypt from "bcryptjs";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
 import { createToken } from "@/lib/auth";
+import { linkClientRelationships } from "@/lib/access";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => null);
 
-    const { email, password } = body;
+    const email = body?.email;
+    const password = body?.password;
 
-    if (!email || !password) {
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !email.trim() ||
+      !password
+    ) {
       return NextResponse.json(
         {
           success: false,
@@ -59,6 +66,12 @@ export async function POST(request: Request) {
       email: user.email,
       role: user.role,
     };
+
+    // Connect any Client relationships that freelancers created
+    // for this email before/after the client registered.
+    if (authUser.role === "client") {
+      await linkClientRelationships(authUser);
+    }
 
     const token = await createToken(authUser);
 

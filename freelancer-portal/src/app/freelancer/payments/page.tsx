@@ -1,85 +1,502 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-type Invoice = { _id: string; invoiceNumber: string; amount: number; client: { _id: string; company: string }; project: { _id: string; name: string } };
-type Payment = { _id: string; invoice?: { invoiceNumber: string }; client?: { name: string; company: string }; project?: { name: string }; amount: number; paymentDate: string; paymentMethod: string; status: "Completed" | "Pending" };
+import {
+  Card,
+  EmptyState,
+  ErrorBanner,
+  LoadingState,
+  PageHeader,
+  StatCard,
+  StatusBadge,
+  formatCurrency,
+  formatDate,
+  inputClass,
+  tdClass,
+  thClass,
+} from "@/components/ui";
 
-export default function PaymentsPage() {
+type Named = { _id: string; name?: string; company?: string };
+
+type Invoice = {
+  _id: string;
+  invoiceNumber: string;
+  amount: number;
+  paidAmount: number;
+  pendingAmount: number;
+  // Remaining budget of the invoice's project (from the server)
+  projectPendingAmount?: number;
+  status: "Draft" | "Pending" | "Paid" | "Overdue";
+  client?: Named;
+  project?: Named;
+};
+
+type Payment = {
+  _id: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: string;
+  status: "Completed" | "Pending";
+  client?: Named;
+  project?: Named;
+  invoice?: { _id: string; invoiceNumber: string; status: string };
+  // Totals of the WHOLE invoice, calculated by the server:
+  invoiceAmount: number;
+  paidAmount: number;
+  pendingAmount: number;
+};
+
+const PAYMENT_METHODS = ["Bank Transfer", "UPI", "Cash", "Card", "Other"];
+
+const todayInput = () => {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+};
+
+export default function FreelancerPaymentsPage() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+
   const [invoiceId, setInvoiceId] = useState("");
-  const [paymentDate, setPaymentDate] = useState("");
+  const [amount, setAmount] = useState("");
+  const [paymentDate, setPaymentDate] = useState(todayInput());
   const [method, setMethod] = useState("Bank Transfer");
+
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All Status");
+  const [statusFilter, setStatusFilter] = useState("All");
   const [showForm, setShowForm] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
 
-  async function loadData() {
-    const [paymentsResponse, invoicesResponse] = await Promise.all([fetch("/api/payments"), fetch("/api/invoices")]);
-    const paymentsData = await paymentsResponse.json();
-    const invoicesData = await invoicesResponse.json();
-    if (!paymentsResponse.ok) throw new Error(paymentsData.message || "Could not load payments.");
-    if (!invoicesResponse.ok) throw new Error(invoicesData.message || "Could not load invoices.");
-    setPayments(paymentsData.payments);
-    setInvoices(invoicesData.invoices.filter((invoice: Invoice & { status: string }) => invoice.status !== "Paid"));
-  }
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [formError, setFormError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  useEffect(() => {
-    loadData().catch((error: Error) => setMessage(error.message));
-  }, []);
-
-  async function handleAddPayment(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const invoice = invoices.find((item) => item._id === invoiceId);
-    if (!invoice || !paymentDate) return;
-    setLoading(true);
-    setMessage("");
+  const loadData = useCallback(async () => {
     try {
-      const response = await fetch("/api/payments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: invoice.client._id, projectId: invoice.project._id, invoiceId, amount: invoice.amount, paymentDate, paymentMethod: method, status: "Completed" }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Failed to record payment.");
-      setMessage("Payment recorded successfully.");
-      setInvoiceId("");
-      setPaymentDate("");
-      setShowForm(false);
-      await loadData();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to connect to the server.");
+      setLoading(true);
+      setError("");
+
+      const [paymentsResponse, invoicesResponse] = await Promise.all([
+        fetch("/api/payments", { cache: "no-store" }),
+        fetch("/api/invoices", { cache: "no-store" }),
+      ]);
+
+      const paymentsData = await paymentsResponse.json();
+      const invoicesData = await invoicesResponse.json();
+
+      if (!paymentsResponse.ok) {
+        throw new Error(paymentsData.message || "Could not load payments.");
+      }
+      if (!invoicesResponse.ok) {
+        throw new Error(invoicesData.message || "Could not load invoices.");
+      }
+
+      setPayments(paymentsData.payments || []);
+      setInvoices(invoicesData.invoices || []);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Could not load payments."
+      );
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Only invoices that still have a pending amount can receive a payment.
+  const payableInvoices = useMemo(
+    () => invoices.filter((invoice) => invoice.pendingAmount > 0),
+    [invoices]
+  );
+
+  const selectedInvoice = payableInvoices.find(
+    (invoice) => invoice._id === invoiceId
+  );
+
+  const handleInvoiceChange = (id: string) => {
+    setInvoiceId(id);
+    setFormError("");
+
+    // Suggest the full pending amount (as reported by the server).
+    const invoice = payableInvoices.find((item) => item._id === id);
+    // Suggest the most that can be accepted: limited by the invoice's
+    // pending amount AND by the project's remaining budget.
+    setAmount(
+      invoice
+        ? String(
+            Math.min(
+              invoice.pendingAmount,
+              invoice.projectPendingAmount ?? invoice.pendingAmount
+            )
+          )
+        : ""
+    );
+  };
+
+  const handleRecordPayment = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setFormError("");
+    setSuccess("");
+
+    if (!selectedInvoice) {
+      setFormError("Please select an invoice.");
+      return;
+    }
+
+    const value = Number(amount);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      setFormError("Payment amount must be greater than 0.");
+      return;
+    }
+
+    if (!paymentDate) {
+      setFormError("Please select a payment date.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      // The server re-checks ownership and the pending amount,
+      // and rejects any overpayment.
+      const response = await fetch("/api/payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: selectedInvoice._id,
+          amount: value,
+          paymentDate,
+          paymentMethod: method,
+          status: "Completed",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setFormError(data.message || "Failed to record payment.");
+        return;
+      }
+
+      setSuccess(data.message || "Payment recorded successfully.");
+      setInvoiceId("");
+      setAmount("");
+      setPaymentDate(todayInput());
+      setShowForm(false);
+      await loadData();
+    } catch {
+      setFormError("Unable to connect to the server.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const visiblePayments = payments.filter((payment) => {
-    const query = `${payment.invoice?.invoiceNumber} ${payment.client?.name} ${payment.client?.company} ${payment.project?.name}`.toLowerCase();
-    return query.includes(search.toLowerCase()) && (statusFilter === "All Status" || payment.status === statusFilter);
+    const haystack = [
+      payment.invoice?.invoiceNumber,
+      payment.client?.name,
+      payment.client?.company,
+      payment.project?.name,
+      payment.paymentMethod,
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return (
+      haystack.includes(search.toLowerCase()) &&
+      (statusFilter === "All" || payment.status === statusFilter)
+    );
   });
-  const received = payments.filter((payment) => payment.status === "Completed").reduce((sum, payment) => sum + payment.amount, 0);
-  const pending = payments.filter((payment) => payment.status === "Pending").reduce((sum, payment) => sum + payment.amount, 0);
 
-  return <main className="min-h-screen bg-slate-950 text-white">
-    <nav className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-6"><Link href="/" className="text-xl font-bold">Freelancer<span className="text-blue-500">Portal</span></Link><Link href="/login" className="text-sm text-slate-400 hover:text-white">Logout</Link></nav>
-    <div className="flex">
-      <aside className="w-64 min-h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 p-5"><h2 className="text-lg font-semibold mb-6">Freelancer</h2><nav className="space-y-2">{[["Dashboard", "/freelancer/dashboard"], ["Clients", "/freelancer/clients"], ["Projects", "/freelancer/projects"], ["Invoices", "/freelancer/invoices"], ["Payments", "/freelancer/payments"], ["Files", "/freelancer/files"], ["Messages", "/freelancer/messages"], ["Reports", "/freelancer/reports"]].map(([label, href]) => <Link key={href} href={href} className={`block px-4 py-3 rounded-lg text-sm ${href.endsWith("payments") ? "bg-blue-600" : "text-slate-400 hover:bg-slate-800"}`}>{label}</Link>)}</nav></aside>
-      <section className="flex-1 p-8"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8"><div><h1 className="text-3xl font-bold">Payments</h1><p className="text-slate-400 mt-2">Track payments received from your clients.</p></div><button onClick={() => setShowForm(!showForm)} className="px-5 py-3 rounded-lg bg-blue-600 hover:bg-blue-700">+ Record Payment</button></div>
-        {message && <p role="status" className="mb-5 text-sm text-blue-300">{message}</p>}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8"><StatCard title="Total Received" value={`₹${received.toLocaleString("en-IN")}`} /><StatCard title="Pending Payments" value={`₹${pending.toLocaleString("en-IN")}`} /><StatCard title="Transactions" value={String(payments.length)} /></div>
-        {showForm && <form onSubmit={handleAddPayment} className="grid grid-cols-1 md:grid-cols-3 gap-5 bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8"><label className="text-sm">Unpaid Invoice<select required value={invoiceId} onChange={(event) => setInvoiceId(event.target.value)} className="mt-2 w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700"><option value="">Select invoice</option>{invoices.map((invoice) => <option key={invoice._id} value={invoice._id}>{invoice.invoiceNumber} · {invoice.client.company} · ₹{invoice.amount.toLocaleString("en-IN")}</option>)}</select></label><label className="text-sm">Payment Date<input required type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} className="mt-2 w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700" /></label><label className="text-sm">Method<select value={method} onChange={(event) => setMethod(event.target.value)} className="mt-2 w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700"><option>Bank Transfer</option><option>UPI</option><option>Card</option><option>Cash</option><option>Other</option></select></label><div className="md:col-span-3 flex justify-end gap-3"><button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border border-slate-700 rounded-lg">Cancel</button><button disabled={loading || invoices.length === 0} className="px-4 py-2 bg-blue-600 rounded-lg disabled:opacity-50">{loading ? "Recording..." : "Record Payment"}</button></div></form>}
-        <div className="flex flex-col md:flex-row gap-4 mb-6"><input type="search" placeholder="Search payments..." value={search} onChange={(event) => setSearch(event.target.value)} className="flex-1 px-4 py-3 rounded-lg bg-slate-900 border border-slate-800" /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="px-4 py-3 rounded-lg bg-slate-900 border border-slate-800"><option>All Status</option><option>Completed</option><option>Pending</option></select></div>
-        <div className="overflow-x-auto bg-slate-900 border border-slate-800 rounded-xl"><table className="w-full"><thead className="bg-slate-800/60"><tr>{["Payment", "Client", "Project", "Amount", "Date", "Method", "Status"].map((heading) => <th key={heading} className="text-left px-5 py-4 text-sm text-slate-400">{heading}</th>)}</tr></thead><tbody>{visiblePayments.map((payment) => <tr key={payment._id} className="border-t border-slate-800"><td className="px-5 py-4"><div>{payment._id.slice(-8).toUpperCase()}</div><div className="text-xs text-slate-500">{payment.invoice?.invoiceNumber}</div></td><td className="px-5 py-4">{payment.client?.company || payment.client?.name}</td><td className="px-5 py-4">{payment.project?.name}</td><td className="px-5 py-4">₹{payment.amount.toLocaleString("en-IN")}</td><td className="px-5 py-4">{new Date(payment.paymentDate).toLocaleDateString("en-IN")}</td><td className="px-5 py-4">{payment.paymentMethod}</td><td className="px-5 py-4">{payment.status}</td></tr>)}</tbody></table>{visiblePayments.length === 0 && <p className="p-8 text-center text-slate-400">No payment records found.</p>}</div>
-      </section>
+  // Summary values are sums of the server-calculated invoice figures.
+  const activeInvoices = invoices.filter((invoice) => invoice.status !== "Draft");
+  const totalReceived = activeInvoices.reduce(
+    (total, invoice) => total + invoice.paidAmount,
+    0
+  );
+  const totalPending = activeInvoices.reduce(
+    (total, invoice) => total + invoice.pendingAmount,
+    0
+  );
+
+  return (
+    <div className="p-4 md:p-8">
+      <PageHeader
+        title="Payments"
+        subtitle="Record payments against invoices and track what is still pending."
+        action={
+          <button
+            onClick={() => {
+              setShowForm(!showForm);
+              setFormError("");
+              setSuccess("");
+            }}
+            className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium transition hover:bg-blue-500"
+          >
+            {showForm ? "Close" : "+ Record Payment"}
+          </button>
+        }
+      />
+
+      <ErrorBanner message={error} onRetry={loadData} />
+
+      {success && (
+        <div className="mb-6 rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-400">
+          {success}
+        </div>
+      )}
+
+      <div className="mb-8 grid gap-5 sm:grid-cols-3">
+        <StatCard
+          title="Total Received"
+          value={loading ? "..." : formatCurrency(totalReceived)}
+          hint="Completed payments"
+        />
+        <StatCard
+          title="Pending on Invoices"
+          value={loading ? "..." : formatCurrency(totalPending)}
+          hint="Invoice amount − completed payments"
+        />
+        <StatCard
+          title="Transactions"
+          value={loading ? "..." : payments.length}
+          hint="Payments recorded"
+        />
+      </div>
+
+      {showForm && (
+        <form
+          onSubmit={handleRecordPayment}
+          className="mb-8 rounded-2xl border border-white/10 bg-[#111827] p-6"
+        >
+          <h2 className="mb-5 text-lg font-semibold">Record Payment</h2>
+
+          {!loading && payableInvoices.length === 0 ? (
+            <p className="text-sm text-gray-400">
+              There are no invoices with a pending amount. Create an invoice
+              first, or all invoices are already fully paid.
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-5 md:grid-cols-2">
+                <label className="block text-sm text-gray-400">
+                  Invoice
+                  <select
+                    required
+                    value={invoiceId}
+                    onChange={(event) => handleInvoiceChange(event.target.value)}
+                    className={`${inputClass} mt-2`}
+                  >
+                    <option value="">Select invoice</option>
+                    {payableInvoices.map((invoice) => (
+                      <option key={invoice._id} value={invoice._id}>
+                        {invoice.invoiceNumber} ·{" "}
+                        {invoice.client?.company || invoice.client?.name} ·{" "}
+                        {invoice.project?.name} · Pending{" "}
+                        {formatCurrency(invoice.pendingAmount)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block text-sm text-gray-400">
+                  Amount (₹)
+                  <input
+                    required
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    placeholder="20000"
+                    className={`${inputClass} mt-2`}
+                  />
+                </label>
+
+                <label className="block text-sm text-gray-400">
+                  Payment Date
+                  <input
+                    required
+                    type="date"
+                    value={paymentDate}
+                    onChange={(event) => setPaymentDate(event.target.value)}
+                    className={`${inputClass} mt-2`}
+                  />
+                </label>
+
+                <label className="block text-sm text-gray-400">
+                  Method
+                  <select
+                    value={method}
+                    onChange={(event) => setMethod(event.target.value)}
+                    className={`${inputClass} mt-2`}
+                  >
+                    {PAYMENT_METHODS.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {selectedInvoice && (
+                <div className="mt-5 grid gap-4 rounded-lg border border-white/10 bg-white/5 p-4 text-sm sm:grid-cols-3">
+                  <div>
+                    <p className="text-gray-500">Invoice Amount</p>
+                    <p className="mt-1 font-semibold">
+                      {formatCurrency(selectedInvoice.amount)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Already Paid</p>
+                    <p className="mt-1 font-semibold text-green-400">
+                      {formatCurrency(selectedInvoice.paidAmount)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Pending</p>
+                    <p className="mt-1 font-semibold text-yellow-400">
+                      {formatCurrency(selectedInvoice.pendingAmount)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {formError && (
+                <p role="alert" className="mt-4 text-sm text-red-400">
+                  {formError}
+                </p>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  className="rounded-lg border border-white/10 px-5 py-2.5 text-sm hover:bg-white/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium transition hover:bg-blue-500 disabled:opacity-50"
+                >
+                  {saving ? "Recording..." : "Record Payment"}
+                </button>
+              </div>
+            </>
+          )}
+        </form>
+      )}
+
+      <div className="mb-6 flex flex-col gap-4 md:flex-row">
+        <input
+          type="search"
+          placeholder="Search invoice, client, project or method..."
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          className={`${inputClass} flex-1`}
+        />
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          className={`${inputClass} md:w-48`}
+        >
+          <option value="All">All Status</option>
+          <option value="Completed">Completed</option>
+          <option value="Pending">Pending</option>
+        </select>
+      </div>
+
+      <Card>
+        {loading ? (
+          <LoadingState label="Loading payments..." />
+        ) : visiblePayments.length === 0 ? (
+          <EmptyState
+            message={
+              payments.length === 0
+                ? "No payments recorded."
+                : "No payments match your search."
+            }
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-white/10 bg-white/5">
+                <tr>
+                  {[
+                    "Payment",
+                    "Client",
+                    "Project",
+                    "Invoice Amount",
+                    "Paid",
+                    "Pending",
+                    "Date",
+                    "Method",
+                    "Status",
+                  ].map((heading) => (
+                    <th key={heading} className={thClass}>
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visiblePayments.map((payment) => (
+                  <tr
+                    key={payment._id}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/5"
+                  >
+                    <td className={tdClass}>
+                      <p className="font-medium">
+                        {formatCurrency(payment.amount)}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {payment.invoice?.invoiceNumber || "Invoice removed"}
+                      </p>
+                    </td>
+                    <td className={`${tdClass} text-gray-300`}>
+                      {payment.client?.company || payment.client?.name || "-"}
+                    </td>
+                    <td className={`${tdClass} text-gray-300`}>
+                      {payment.project?.name || "-"}
+                    </td>
+                    <td className={tdClass}>
+                      {formatCurrency(payment.invoiceAmount)}
+                    </td>
+                    <td className={`${tdClass} text-green-400`}>
+                      {formatCurrency(payment.paidAmount)}
+                    </td>
+                    <td className={`${tdClass} text-yellow-400`}>
+                      {formatCurrency(payment.pendingAmount)}
+                    </td>
+                    <td className={`${tdClass} text-gray-400`}>
+                      {formatDate(payment.paymentDate)}
+                    </td>
+                    <td className={`${tdClass} text-gray-400`}>
+                      {payment.paymentMethod}
+                    </td>
+                    <td className={tdClass}>
+                      <StatusBadge status={payment.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <p className="mt-4 text-xs text-gray-500">
+        Invoice Amount, Paid and Pending are the totals of the whole invoice:
+        Pending = Invoice Amount − all completed payments for that invoice.
+      </p>
     </div>
-  </main>;
-}
-
-function StatCard({ title, value }: { title: string; value: string }) {
-  return <div className="bg-slate-900 border border-slate-800 rounded-xl p-6"><p className="text-sm text-slate-400">{title}</p><p className="text-2xl font-bold mt-2">{value}</p></div>;
+  );
 }

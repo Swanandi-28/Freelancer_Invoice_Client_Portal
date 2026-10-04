@@ -1,32 +1,63 @@
 import { NextResponse } from "next/server";
+
 import Client from "@/models/Client";
 import Invoice from "@/models/Invoice";
 import Payment from "@/models/Payment";
 import Project from "@/models/Project";
-import connectDB from "@/lib/mongodb";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { requireUser, resolveScope } from "@/lib/access";
+import { withInvoiceAmounts, withPaymentAmounts } from "@/lib/finance";
+import { serverError } from "@/lib/api";
 
+/*
+  Generic dashboard data for the logged-in user (either role).
+  The role-specific routes /api/dashboard/freelancer and
+  /api/dashboard/client are what the pages use.
+*/
 export async function GET() {
-  const user = await getAuthenticatedUser();
-  if (!user) return NextResponse.json({ message: "Unauthorized." }, { status: 401 });
-
   try {
-    await connectDB();
-    const linkedClients = user.role === "client"
-      ? await Client.find({ email: user.email }).select("_id")
-      : [];
-    const ownership = user.role === "freelancer"
-      ? { freelancer: user.id }
-      : { client: { $in: linkedClients.map((client) => client._id) } };
+    const auth = await requireUser();
+    if (auth.response) return auth.response;
+    const user = auth.user;
+
+    const scoped = await resolveScope(user);
+    if (scoped.response) return scoped.response;
+    const filter = scoped.scope.filter;
+
     const [clients, projects, invoices, payments] = await Promise.all([
-      user.role === "freelancer" ? Client.find(ownership).sort({ createdAt: -1 }) : Promise.resolve([]),
-      Project.find(ownership).populate("client", "name company email").populate("freelancer", "name email").sort({ createdAt: -1 }),
-      Invoice.find(ownership).populate("client", "name company email").populate("project", "name").populate("freelancer", "name email").sort({ createdAt: -1 }),
-      Payment.find(ownership).populate("client", "name company email").populate("project", "name").populate("invoice", "invoiceNumber").populate("freelancer", "name email").sort({ createdAt: -1 }),
+      user.role === "freelancer"
+        ? Client.find(filter).sort({ createdAt: -1 }).lean()
+        : Promise.resolve([]),
+      Project.find(filter)
+        .populate("client", "name company email")
+        .populate("freelancer", "name email")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Invoice.find(
+        user.role === "client" ? { ...filter, status: { $ne: "Draft" } } : filter
+      )
+        .populate("client", "name company email")
+        .populate("project", "name")
+        .populate("freelancer", "name email")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Payment.find(filter)
+        .populate("client", "name company email")
+        .populate("project", "name")
+        .populate("invoice", "invoiceNumber amount status dueDate")
+        .populate("freelancer", "name email")
+        .sort({ createdAt: -1 })
+        .lean(),
     ]);
-    return NextResponse.json({ success: true, user, clients, projects, invoices, payments });
+
+    return NextResponse.json({
+      success: true,
+      user,
+      clients,
+      projects,
+      invoices: await withInvoiceAmounts(invoices),
+      payments: await withPaymentAmounts(payments),
+    });
   } catch (error) {
-    console.error("Get dashboard data error:", error);
-    return NextResponse.json({ message: "Failed to fetch dashboard data." }, { status: 500 });
+    return serverError("Get dashboard data error", error, "Failed to fetch dashboard data.");
   }
 }

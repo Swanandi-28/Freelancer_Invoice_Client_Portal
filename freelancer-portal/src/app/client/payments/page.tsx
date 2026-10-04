@@ -1,17 +1,178 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useState } from "react";
 
-type Payment = { _id: string; invoice?: { invoiceNumber: string }; freelancer?: { name: string }; project?: { name: string }; amount: number; paymentDate: string; paymentMethod: string; status: string };
+import { useApiList } from "@/components/useApiList";
+import {
+  Card,
+  EmptyState,
+  ErrorBanner,
+  LoadingState,
+  PageHeader,
+  StatCard,
+  StatusBadge,
+  formatCurrency,
+  formatDate,
+  inputClass,
+  tdClass,
+  thClass,
+} from "@/components/ui";
+
+type Payment = {
+  _id: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: string;
+  status: string;
+  invoice?: { _id: string; invoiceNumber: string };
+  freelancer?: { _id: string; name: string };
+  project?: { name: string };
+  // Totals of the whole invoice, calculated by the server:
+  invoiceAmount: number;
+  paidAmount: number;
+  pendingAmount: number;
+  // Remaining budget of the project this payment belongs to
+  projectPendingAmount: number;
+};
+
 export default function ClientPaymentsPage() {
-  const [payments, setPayments] = useState<Payment[]>([]);
+  const { items: payments, loading, error, reload } = useApiList<Payment>(
+    "/api/payments",
+    "payments"
+  );
+
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("All");
-  const [error, setError] = useState("");
-  useEffect(() => { fetch("/api/payments").then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.message || "Could not load payments."); setPayments(data.payments); }).catch((reason: Error) => setError(reason.message)); }, []);
-  const visible = payments.filter((payment) => `${payment._id} ${payment.invoice?.invoiceNumber} ${payment.freelancer?.name} ${payment.project?.name}`.toLowerCase().includes(search.toLowerCase()) && (filter === "All" || payment.status === filter));
-  const completed = payments.filter((payment) => payment.status === "Completed").reduce((sum, payment) => sum + payment.amount, 0);
-  const pending = payments.filter((payment) => payment.status === "Pending").reduce((sum, payment) => sum + payment.amount, 0);
-  return <main className="min-h-screen bg-slate-950 text-white"><header className="border-b border-slate-800 bg-slate-900 px-6 py-4 flex justify-between"><Link href="/client/dashboard" className="text-xl font-bold">Freelancer<span className="text-blue-500">Portal</span></Link><Link href="/client/dashboard" className="text-slate-400">Dashboard</Link></header><section className="max-w-7xl mx-auto p-6 md:p-8"><h1 className="text-3xl font-bold">Payment History</h1><p className="text-slate-400 mt-2">Payments recorded against invoices linked to your account.</p>{error && <p role="alert" className="mt-4 text-red-400">{error}</p>}<div className="grid md:grid-cols-3 gap-4 my-7">{[["Transactions", payments.length], ["Completed", `₹${completed.toLocaleString("en-IN")}`], ["Pending", `₹${pending.toLocaleString("en-IN")}`]].map(([label, value]) => <div key={String(label)} className="bg-slate-900 border border-slate-800 rounded-xl p-5"><p className="text-slate-400">{label}</p><p className="text-2xl font-bold mt-2">{value}</p></div>)}</div><div className="flex flex-col md:flex-row gap-3 mb-5"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payment, invoice, project" className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-4 py-3"/><select value={filter} onChange={(event) => setFilter(event.target.value)} className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-3"><option>All</option><option>Completed</option><option>Pending</option></select></div><div className="overflow-x-auto bg-slate-900 border border-slate-800 rounded-xl"><table className="w-full"><thead><tr>{["Payment", "Invoice", "Freelancer", "Project", "Amount", "Date", "Method", "Status"].map((heading) => <th key={heading} className="text-left px-4 py-4 text-sm text-slate-400">{heading}</th>)}</tr></thead><tbody>{visible.map((payment) => <tr key={payment._id} className="border-t border-slate-800"><td className="px-4 py-4">{payment._id.slice(-8).toUpperCase()}</td><td className="px-4 py-4">{payment.invoice?.invoiceNumber}</td><td className="px-4 py-4">{payment.freelancer?.name}</td><td className="px-4 py-4">{payment.project?.name}</td><td className="px-4 py-4">₹{payment.amount.toLocaleString("en-IN")}</td><td className="px-4 py-4">{new Date(payment.paymentDate).toLocaleDateString("en-IN")}</td><td className="px-4 py-4">{payment.paymentMethod}</td><td className="px-4 py-4">{payment.status}</td></tr>)}</tbody></table>{visible.length === 0 && <p className="p-8 text-center text-slate-400">No payment records found.</p>}</div><p className="text-slate-500 text-sm mt-4">Payment history is a record of payments. No online payment gateway is configured.</p></section></main>;
+  const [status, setStatus] = useState("All");
+  const [freelancer, setFreelancer] = useState("All");
+
+  const freelancers = [
+    ...new Map(
+      payments
+        .filter((payment) => payment.freelancer)
+        .map((payment) => [payment.freelancer!._id, payment.freelancer!.name])
+    ),
+  ];
+
+  const scoped = payments.filter(
+    (payment) => freelancer === "All" || payment.freelancer?._id === freelancer
+  );
+
+  const visible = scoped.filter(
+    (payment) =>
+      `${payment.invoice?.invoiceNumber} ${payment.freelancer?.name} ${payment.project?.name} ${payment.paymentMethod}`
+        .toLowerCase()
+        .includes(search.toLowerCase()) &&
+      (status === "All" || payment.status === status)
+  );
+
+  const completed = scoped
+    .filter((payment) => payment.status === "Completed")
+    .reduce((sum, payment) => sum + payment.amount, 0);
+
+  const awaiting = scoped
+    .filter((payment) => payment.status === "Pending")
+    .reduce((sum, payment) => sum + payment.amount, 0);
+
+  return (
+    <div className="p-4 md:p-8">
+      <PageHeader
+        title="Payment History"
+        subtitle="Payments recorded against your invoices."
+      />
+
+      <ErrorBanner message={error} onRetry={reload} />
+
+      <div className="mb-8 grid gap-5 sm:grid-cols-3">
+        <StatCard title="Transactions" value={loading ? "..." : scoped.length} />
+        <StatCard title="Total Paid" value={loading ? "..." : formatCurrency(completed)} hint="Completed payments" />
+        <StatCard title="Awaiting Confirmation" value={loading ? "..." : formatCurrency(awaiting)} hint="Payments marked pending" />
+      </div>
+
+      <div className="mb-6 flex flex-col gap-4 md:flex-row">
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search invoice, project, freelancer or method..."
+          className={`${inputClass} flex-1`}
+        />
+        <select
+          value={freelancer}
+          onChange={(event) => setFreelancer(event.target.value)}
+          className={`${inputClass} md:w-56`}
+        >
+          <option value="All">All Freelancers</option>
+          {freelancers.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+          className={`${inputClass} md:w-44`}
+        >
+          <option value="All">All Status</option>
+          <option>Completed</option>
+          <option>Pending</option>
+        </select>
+      </div>
+
+      <Card>
+        {loading ? (
+          <LoadingState label="Loading payments..." />
+        ) : visible.length === 0 ? (
+          <EmptyState
+            message={
+              payments.length === 0
+                ? "No payments recorded."
+                : "No payments match your filters."
+            }
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-white/10 bg-white/5">
+                <tr>
+                  {["Payment", "Freelancer", "Project", "Invoice Amount", "Paid", "Project Pending", "Date", "Method", "Status"].map(
+                    (heading) => (
+                      <th key={heading} className={thClass}>
+                        {heading}
+                      </th>
+                    )
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((payment) => (
+                  <tr
+                    key={payment._id}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/5"
+                  >
+                    <td className={tdClass}>
+                      <p className="font-medium">{formatCurrency(payment.amount)}</p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {payment.invoice?.invoiceNumber || "-"}
+                      </p>
+                    </td>
+                    <td className={`${tdClass} text-gray-300`}>{payment.freelancer?.name || "-"}</td>
+                    <td className={`${tdClass} text-gray-300`}>{payment.project?.name || "-"}</td>
+                    <td className={tdClass}>{formatCurrency(payment.invoiceAmount)}</td>
+                    <td className={`${tdClass} text-green-400`}>{formatCurrency(payment.paidAmount)}</td>
+                    <td className={`${tdClass} text-yellow-400`}>{formatCurrency(payment.projectPendingAmount)}</td>
+                    <td className={`${tdClass} text-gray-400`}>{formatDate(payment.paymentDate)}</td>
+                    <td className={`${tdClass} text-gray-400`}>{payment.paymentMethod}</td>
+                    <td className={tdClass}>
+                      <StatusBadge status={payment.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
 }

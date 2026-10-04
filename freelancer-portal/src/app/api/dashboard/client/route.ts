@@ -1,313 +1,157 @@
 import { NextResponse } from "next/server";
 
-import connectDB from "@/lib/mongodb";
-import Client from "@/models/Client";
 import Project from "@/models/Project";
 import Invoice from "@/models/Invoice";
 import Payment from "@/models/Payment";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { getClientRelationships, requireUser } from "@/lib/access";
+import {
+  sum,
+  withInvoiceAmounts,
+  withProjectAmounts,
+  withProjectTotals,
+} from "@/lib/finance";
+import { serverError } from "@/lib/api";
+
+type Named = { _id?: { toString(): string }; name?: string; email?: string } | null;
+
+const nameOf = (value: unknown, fallback: string) =>
+  (value as Named)?.name || fallback;
 
 export async function GET() {
   try {
-    const user = await getAuthenticatedUser();
-
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
-
-    if (user.role !== "client") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only clients can access this dashboard.",
-        },
-        { status: 403 }
-      );
-    }
-
-    await connectDB();
+    const auth = await requireUser("client");
+    if (auth.response) return auth.response;
+    const user = auth.user;
 
     /*
-      Find every Client relationship belonging
-      to the currently logged-in client user.
+      Authenticated client user
+        -> Client relationships (user = me, auto-linked by email)
+        -> projects / invoices / payments of those relationships
     */
-    const clientRelationships = await Client.find({
-      user: user.id,
-    })
-      .populate("freelancer", "name email")
-      .sort({ createdAt: -1 })
-      .lean();
+    const relationships = await getClientRelationships(user);
+    const clientIds = relationships.map((relationship) => relationship._id);
 
-    if (clientRelationships.length === 0) {
-      return NextResponse.json({
-        success: true,
-        client: {
-          name: user.name,
-          email: user.email,
-        },
+    const [rawProjects, rawInvoices, payments] = await Promise.all([
+      Project.find({ client: { $in: clientIds } })
+        .populate("freelancer", "name email")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Invoice.find({ client: { $in: clientIds }, status: { $ne: "Draft" } })
+        .populate("freelancer", "name email")
+        .populate("project", "name")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Payment.find({ client: { $in: clientIds } })
+        .populate("freelancer", "name email")
+        .populate("project", "name")
+        .populate("invoice", "invoiceNumber")
+        .sort({ paymentDate: -1, createdAt: -1 })
+        .lean(),
+    ]);
 
-        stats: {
-          totalFreelancers: 0,
-          activeProjects: 0,
-          pendingInvoices: 0,
-          totalPaid: 0,
-        },
-
-        freelancers: [],
-        recentProjects: [],
-        recentInvoices: [],
-        recentPayments: [],
-      });
-    }
-
-    // IDs of all Client relationship records
-    const clientIds = clientRelationships.map(
-      (client) => client._id
-    );
-
-    // -----------------------------
-    // PROJECTS
-    // -----------------------------
-
-    const projects = await Project.find({
-      client: { $in: clientIds },
-    })
-      .populate("freelancer", "name email")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const activeProjects = projects.filter(
-      (project) => project.status === "In Progress"
-    ).length;
-
-    // -----------------------------
-    // INVOICES
-    // -----------------------------
-
-    const invoices = await Invoice.find({
-      client: { $in: clientIds },
-    })
-      .populate("freelancer", "name email")
-      .populate("project", "name")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const pendingInvoices = invoices.filter(
-      (invoice) =>
-        invoice.status === "Pending" ||
-        invoice.status === "Overdue"
-    );
-
-    const pendingInvoiceAmount = pendingInvoices.reduce(
-      (total, invoice) =>
-        total + Number(invoice.amount || 0),
-      0
-    );
-
-    // -----------------------------
-    // PAYMENTS
-    // -----------------------------
-
-    const payments = await Payment.find({
-      client: { $in: clientIds },
-    })
-      .populate("freelancer", "name email")
-      .populate("project", "name")
-      .populate("invoice", "invoiceNumber")
-      .sort({ paymentDate: -1 })
-      .lean();
+    const projects = await withProjectAmounts(rawProjects);
+    const invoices = await withProjectTotals(await withInvoiceAmounts(rawInvoices));
 
     const completedPayments = payments.filter(
       (payment) => payment.status === "Completed"
     );
 
-    const totalPaid = completedPayments.reduce(
-      (total, payment) =>
-        total + Number(payment.amount || 0),
-      0
-    );
+    // ---------- My Freelancers: one card per relationship ----------
+    const freelancers = relationships.map((relationship) => {
+      const relationshipId = relationship._id.toString();
+      const freelancer = relationship.freelancer as unknown as Named;
 
-    // -----------------------------
-    // FREELANCERS
-    // -----------------------------
+      const ownProjects = projects.filter(
+        (project) => project.client.toString() === relationshipId
+      );
+      const ownInvoices = invoices.filter(
+        (invoice) => invoice.client.toString() === relationshipId
+      );
 
-    const freelancers = clientRelationships.map(
-      (client) => ({
-        id: client._id.toString(),
-
-        freelancer:
-          typeof client.freelancer === "object" &&
-          client.freelancer !== null
-            ? {
-                id: (
-                  client.freelancer as any
-                )._id?.toString(),
-
-                name:
-                  (client.freelancer as any)
-                    .name || "Freelancer",
-
-                email:
-                  (client.freelancer as any)
-                    .email || "",
-              }
-            : null,
-
-        company: client.company,
-
-        clientName: client.name,
-
-        email: client.email,
-      })
-    );
-
-    // -----------------------------
-    // RECENT PROJECTS
-    // -----------------------------
-
-    const recentProjects = projects
-      .slice(0, 5)
-      .map((project) => ({
-        id: project._id.toString(),
-
-        name: project.name,
-
-        description: project.description,
-
-        budget: Number(project.budget || 0),
-
-        deadline: project.deadline,
-
-        status: project.status,
-
-        freelancer:
-          typeof project.freelancer === "object" &&
-          project.freelancer !== null
-            ? (project.freelancer as any).name ||
-              "Freelancer"
-            : "Freelancer",
-      }));
-
-    // -----------------------------
-    // RECENT INVOICES
-    // -----------------------------
-
-    const recentInvoices = invoices
-      .slice(0, 5)
-      .map((invoice) => ({
-        id: invoice._id.toString(),
-
-        invoiceNumber:
-          invoice.invoiceNumber,
-
-        amount: Number(invoice.amount || 0),
-
-        issueDate: invoice.issueDate,
-
-        dueDate: invoice.dueDate,
-
-        status: invoice.status,
-
-        project:
-          typeof invoice.project === "object" &&
-          invoice.project !== null
-            ? (invoice.project as any).name ||
-              "Project"
-            : "Project",
-
-        freelancer:
-          typeof invoice.freelancer === "object" &&
-          invoice.freelancer !== null
-            ? (invoice.freelancer as any).name ||
-              "Freelancer"
-            : "Freelancer",
-      }));
-
-    // -----------------------------
-    // RECENT PAYMENTS
-    // -----------------------------
-
-    const recentPayments = payments
-      .slice(0, 5)
-      .map((payment) => ({
-        id: payment._id.toString(),
-
-        amount: Number(payment.amount || 0),
-
-        paymentDate: payment.paymentDate,
-
-        paymentMethod:
-          payment.paymentMethod,
-
-        status: payment.status,
-
-        project:
-          typeof payment.project === "object" &&
-          payment.project !== null
-            ? (payment.project as any).name ||
-              "Project"
-            : "Project",
-
-        invoice:
-          typeof payment.invoice === "object" &&
-          payment.invoice !== null
-            ? (
-                payment.invoice as any
-              ).invoiceNumber || "Invoice"
-            : "Invoice",
-      }));
-
-    // -----------------------------
-    // RESPONSE
-    // -----------------------------
+      return {
+        id: relationshipId,
+        freelancer: freelancer
+          ? {
+              id: freelancer._id?.toString(),
+              name: freelancer.name || "Freelancer",
+              email: freelancer.email || "",
+            }
+          : null,
+        company: relationship.company,
+        clientName: relationship.name,
+        email: relationship.email,
+        projectCount: ownProjects.length,
+        projects: ownProjects.map((project) => project.name),
+        budget: sum(ownProjects.map((project) => project.budget)),
+        // Project level: budget - completed payments of each project.
+        pendingAmount: sum(ownProjects.map((project) => project.pendingAmount)),
+        paidAmount: sum(ownProjects.map((project) => project.paidAmount)),
+        pendingInvoiceAmount: sum(ownInvoices.map((invoice) => invoice.pendingAmount)),
+      };
+    });
 
     return NextResponse.json({
       success: true,
-
-      client: {
-        name: user.name,
-        email: user.email,
-      },
-
+      client: { name: user.name, email: user.email },
       stats: {
-        totalFreelancers:
-          clientRelationships.length,
-
-        activeProjects,
-
-        pendingInvoices:
-          pendingInvoiceAmount,
-
-        totalPaid,
+        totalFreelancers: new Set(
+          freelancers.map((item) => item.freelancer?.id || item.id)
+        ).size,
+        activeProjects: projects.filter(
+          (project) => project.status === "In Progress"
+        ).length,
+        totalBudget: sum(projects.map((project) => project.budget)),
+        // Sum over projects of (project budget - completed payments of that project)
+        pendingAmount: sum(projects.map((project) => project.pendingAmount)),
+        // Sum of (invoice amount - completed payments for that invoice)
+        pendingInvoices: sum(invoices.map((invoice) => invoice.pendingAmount)),
+        totalPaid: sum(completedPayments.map((payment) => payment.amount)),
       },
-
       freelancers,
-
-      recentProjects,
-
-      recentInvoices,
-
-      recentPayments,
+      recentProjects: projects.slice(0, 5).map((project) => ({
+        id: project._id.toString(),
+        name: project.name,
+        description: project.description,
+        budget: project.budget,
+        paidAmount: project.paidAmount,
+        pendingAmount: project.pendingAmount,
+        deadline: project.deadline,
+        status: project.status,
+        freelancer: nameOf(project.freelancer, "Freelancer"),
+      })),
+      recentInvoices: invoices.slice(0, 5).map((invoice) => ({
+        id: invoice._id.toString(),
+        invoiceNumber: invoice.invoiceNumber,
+        amount: invoice.amount,
+        paidAmount: invoice.paidAmount,
+        pendingAmount: invoice.pendingAmount,
+        projectBudget: invoice.projectBudget,
+        projectPaidAmount: invoice.projectPaidAmount,
+        projectPendingAmount: invoice.projectPendingAmount,
+        issueDate: invoice.issueDate,
+        dueDate: invoice.dueDate,
+        status: invoice.status,
+        project: nameOf(invoice.project, "Project"),
+        freelancer: nameOf(invoice.freelancer, "Freelancer"),
+      })),
+      recentPayments: payments.slice(0, 5).map((payment) => ({
+        id: payment._id.toString(),
+        amount: Number(payment.amount || 0),
+        paymentDate: payment.paymentDate,
+        paymentMethod: payment.paymentMethod,
+        status: payment.status,
+        project: nameOf(payment.project, "Project"),
+        freelancer: nameOf(payment.freelancer, "Freelancer"),
+        invoice:
+          (payment.invoice as unknown as { invoiceNumber?: string } | null)
+            ?.invoiceNumber || "Invoice",
+      })),
     });
   } catch (error) {
-    console.error(
-      "Client dashboard error:",
-      error
-    );
-
-    return NextResponse.json(
-      {
-        success: false,
-        message:
-          "Failed to load client dashboard.",
-      },
-      { status: 500 }
+    return serverError(
+      "Client dashboard error",
+      error,
+      "Failed to load client dashboard."
     );
   }
 }

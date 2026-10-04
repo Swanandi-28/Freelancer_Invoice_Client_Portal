@@ -38,15 +38,19 @@ export default function LoginPage() {
         return;
       }
 
-      // Temporary client-side session
-      localStorage.setItem("user", JSON.stringify(data.user));
+      // The session lives in the HTTP-only auth cookie set by the server.
+      // Nothing is stored in localStorage.
 
       // Redirect based on role
       if (data.user.role === "freelancer") {
         router.push("/freelancer/dashboard");
+      } else if (data.user.role === "admin") {
+        router.push("/admin/freelancers");
       } else {
         router.push("/client/dashboard");
       }
+
+      router.refresh();
     } catch (error) {
       console.error(error);
       setError("Unable to connect to the server.");

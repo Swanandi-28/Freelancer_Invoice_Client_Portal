@@ -3,120 +3,124 @@ import bcrypt from "bcryptjs";
 
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
-import Client from "@/models/Client";
+import { cleanString, fail, isEmail, readJson, serverError } from "@/lib/api";
+import { linkClientRelationships } from "@/lib/access";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await readJson(request);
 
-    const name = body.name?.trim();
-    const email = body.email?.toLowerCase().trim();
-    const password = body.password;
+    if (!body) {
+      return fail("Invalid request body.", 400);
+    }
+
+    const name = cleanString(body.name, 100);
+    const email = cleanString(body.email, 254).toLowerCase();
+    const password = typeof body.password === "string" ? body.password : "";
     const role = body.role;
 
     if (!name || !email || !password || !role) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "All fields are required.",
-        },
-        { status: 400 }
-      );
+      return fail("All fields are required.", 400);
+    }
+
+    if (!isEmail(email)) {
+      return fail("Please enter a valid email address.", 400);
     }
 
     if (role !== "freelancer" && role !== "client") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Invalid role.",
-        },
-        { status: 400 }
-      );
+      return fail("Invalid role.", 400);
     }
 
     if (password.length < 6) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Password must be at least 6 characters.",
-        },
-        { status: 400 }
-      );
+      return fail("Password must be at least 6 characters.", 400);
+    }
+
+    if (password.length > 72) {
+      return fail("Password cannot be longer than 72 characters.", 400);
     }
 
     await connectDB();
 
-    // Check whether the email is already registered.
-    const existingUser = await User.findOne({
-      email,
-    });
+    const existingUser = await User.findOne({ email });
 
     if (existingUser) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "An account with this email already exists.",
-        },
-        { status: 409 }
-      );
+      return fail("An account with this email already exists.", 409);
     }
+
+    /*
+      ADMINISTRATORS
+
+      Nobody can choose the "admin" role in the registration form.
+      An account becomes an administrator only when its email is listed
+      in ADMIN_EMAILS in .env.local (comma separated), e.g.
+
+        ADMIN_EMAILS="admin@example.com"
+
+      Administrators manage freelancer accounts at /admin/freelancers.
+    */
+    const adminEmails = (process.env.ADMIN_EMAILS || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+
+    const finalRole: "freelancer" | "client" | "admin" = adminEmails.includes(email)
+      ? "admin"
+      : role;
 
     // Hash password before saving.
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create the user account.
-    const newUser = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role,
-    });
+    let newUser;
+
+    try {
+      newUser = await User.create({
+        name,
+        email,
+        password: hashedPassword,
+        role: finalRole,
+      });
+    } catch (error) {
+      // Two registrations with the same email at the same time.
+      if ((error as { code?: number })?.code === 11000) {
+        return fail("An account with this email already exists.", 409);
+      }
+      throw error;
+    }
 
     /*
       CLIENT ACCOUNT CONNECTION
 
-      If a freelancer already added this email
-      as a client, connect that Client record
-      to the newly created client User account.
+      If one or more freelancers already added this email as a client,
+      connect those Client relationships to the new client account.
     */
-    if (role === "client") {
-      await Client.updateMany(
-        {
-          email,
-          user: { $exists: false },
-        },
-        {
-          $set: {
-            user: newUser._id,
-          },
-        }
-      );
-    }
+    let connectedRelationships = 0;
 
-    const safeUser = {
-      id: newUser._id.toString(),
-      name: newUser.name,
-      email: newUser.email,
-      role: newUser.role,
-    };
+    if (finalRole === "client") {
+      connectedRelationships = await linkClientRelationships({
+        id: newUser._id.toString(),
+        email,
+      });
+    }
 
     return NextResponse.json(
       {
         success: true,
         message: "Account created successfully.",
-        user: safeUser,
+        user: {
+          id: newUser._id.toString(),
+          name: newUser.name,
+          email: newUser.email,
+          role: newUser.role,
+        },
+        connectedRelationships,
       },
       { status: 201 }
     );
   } catch (error) {
-    console.error("Registration error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Something went wrong during registration.",
-      },
-      { status: 500 }
+    return serverError(
+      "Registration error",
+      error,
+      "Something went wrong during registration."
     );
   }
 }

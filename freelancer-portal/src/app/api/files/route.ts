@@ -2,67 +2,54 @@ import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
+import mongoose from "mongoose";
 
 import connectDB from "@/lib/mongodb";
 import FileModel from "@/models/File";
 import Client from "@/models/Client";
 import Project from "@/models/Project";
 import { getAuthenticatedUser } from "@/lib/auth";
+import { requireUser, resolveScope } from "@/lib/access";
+import { isObjectId, serverError } from "@/lib/api";
 
 export const runtime = "nodejs";
 
 // =====================================================
 // GET FILES
+//   freelancer: files they uploaded      (?clientId= / ?projectId=)
+//   client:     files of their own       (?clientId= / ?freelancerId= / ?projectId=)
+//               freelancer relationships
+//
+// Each file includes `downloadUrl`, an authenticated route that
+// re-checks ownership before sending the file.
 // =====================================================
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser();
+    if (auth.response) return auth.response;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
+    const scoped = await resolveScope(
+      auth.user,
+      new URL(request.url).searchParams
+    );
+    if (scoped.response) return scoped.response;
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can access files.",
-        },
-        { status: 403 }
-      );
-    }
-
-    await connectDB();
-
-    const files = await FileModel.find({
-      freelancer: user.id,
-    })
+    const files = await FileModel.find(scoped.scope.filter)
       .populate("client", "name company email")
       .populate("project", "name")
+      .populate("freelancer", "name email")
       .sort({ createdAt: -1 })
       .lean();
 
     return NextResponse.json({
       success: true,
-      files,
+      files: files.map((file) => ({
+        ...file,
+        downloadUrl: `/api/files/${file._id.toString()}/download`,
+      })),
     });
   } catch (error) {
-    console.error("Get files error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to load files.",
-      },
-      { status: 500 }
-    );
+    return serverError("Get files error", error, "Failed to load files.");
   }
 }
 
@@ -137,6 +124,26 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!isObjectId(clientId) || !isObjectId(projectId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid client or project.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (uploadedFile.size === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "The selected file is empty.",
+        },
+        { status: 400 }
+      );
+    }
+
     // -------------------------------------------------
     // FILE SIZE LIMIT
     // -------------------------------------------------
@@ -198,11 +205,10 @@ export async function POST(request: Request) {
     // CREATE UPLOAD DIRECTORY
     // -------------------------------------------------
 
-    const uploadDirectory = path.join(
-      process.cwd(),
-      "public",
-      "uploads"
-    );
+    // Files are kept OUTSIDE /public so they can never be opened by
+    // guessing a URL. They are only served by the authenticated
+    // /api/files/:id/download route, which re-checks ownership.
+    const uploadDirectory = path.join(process.cwd(), "uploads");
 
     await mkdir(uploadDirectory, {
       recursive: true,
@@ -212,9 +218,14 @@ export async function POST(request: Request) {
     // GENERATE SAFE UNIQUE FILE NAME
     // -------------------------------------------------
 
-    const originalName = uploadedFile.name;
+    const originalName =
+      path.basename(uploadedFile.name || "file").slice(0, 200) || "file";
 
-    const extension = path.extname(originalName);
+    // Only keep a simple, safe extension (e.g. ".pdf").
+    const rawExtension = path.extname(originalName).toLowerCase();
+    const extension = /^\.[a-z0-9]{1,10}$/.test(rawExtension)
+      ? rawExtension
+      : "";
 
     const safeFileName =
       `${randomUUID()}${extension}`;
@@ -240,17 +251,20 @@ export async function POST(request: Request) {
     await writeFile(filePath, buffer);
 
     // -------------------------------------------------
-    // PUBLIC URL
+    // DOWNLOAD URL (authenticated route, not a public path)
     // -------------------------------------------------
 
+    const fileId = new mongoose.Types.ObjectId();
+
     const fileUrl =
-      `/uploads/${safeFileName}`;
+      `/api/files/${fileId.toString()}/download`;
 
     // -------------------------------------------------
     // SAVE FILE INFORMATION TO MONGODB
     // -------------------------------------------------
 
     const savedFile = await FileModel.create({
+      _id: fileId,
       freelancer: user.id,
       client: clientId,
       project: projectId,
@@ -287,7 +301,12 @@ export async function POST(request: Request) {
       {
         success: true,
         message: "File uploaded successfully.",
-        file: populatedFile,
+        file: populatedFile
+          ? {
+              ...populatedFile,
+              downloadUrl: `/api/files/${savedFile._id.toString()}/download`,
+            }
+          : null,
       },
       { status: 201 }
     );

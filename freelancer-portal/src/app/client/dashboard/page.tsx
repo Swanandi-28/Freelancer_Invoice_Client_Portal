@@ -1,18 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type Freelancer = {
   id: string;
   freelancer: {
-    id: string;
+    id?: string;
     name: string;
     email: string;
   } | null;
   company: string;
   clientName: string;
   email: string;
+  projectCount?: number;
+  projects?: string[];
+  pendingAmount?: number;
+  paidAmount?: number;
 };
 
 type Project = {
@@ -20,6 +24,8 @@ type Project = {
   name: string;
   description: string;
   budget: number;
+  paidAmount: number;
+  pendingAmount: number;
   deadline: string;
   status: string;
   freelancer: string;
@@ -29,6 +35,9 @@ type Invoice = {
   id: string;
   invoiceNumber: string;
   amount: number;
+  paidAmount: number;
+  pendingAmount: number;
+  projectPendingAmount: number;
   issueDate: string;
   dueDate: string;
   status: string;
@@ -56,6 +65,7 @@ type DashboardData = {
     totalFreelancers: number;
     activeProjects: number;
     pendingInvoices: number;
+    pendingAmount: number;
     totalPaid: number;
   };
 
@@ -65,82 +75,166 @@ type DashboardData = {
   recentPayments: Payment[];
 };
 
-const formatCurrency = (amount: number) => {
-  return `₹${amount.toLocaleString("en-IN")}`;
-};
+export default function ClientDashboard() {
+  const router = useRouter();
 
-const formatDate = (date: string) => {
-  if (!date) return "-";
-
-  return new Date(date).toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-};
-
-export default function ClientDashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    loadDashboard();
-  }, []);
+  // --------------------------------------------------
+  // LOAD CLIENT DASHBOARD
+  // --------------------------------------------------
 
   const loadDashboard = async () => {
     try {
       setLoading(true);
       setError("");
 
+      /*
+       * First synchronize the existing Client records
+       * with the currently logged-in client's User account.
+       *
+       * Example:
+       *
+       * Freelancer created:
+       * Aishwarya - aishwarya@gmail.com
+       *
+       * Aishwarya later registers with:
+       * aishwarya@gmail.com
+       *
+       * This connects both records.
+       */
       await fetch("/api/client/sync", {
-      method: "POST",
-    });
+        method: "POST",
+      });
 
+      // Now load the actual dashboard data.
       const response = await fetch(
         "/api/dashboard/client",
         {
           method: "GET",
           credentials: "include",
+          cache: "no-store",
         }
       );
 
       const result = await response.json();
 
       if (!response.ok) {
-        setError(
+        if (response.status === 401) {
+          router.push("/login");
+          return;
+        }
+
+        throw new Error(
           result.message ||
             "Failed to load dashboard."
         );
-        return;
       }
 
       setData(result);
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Client dashboard error:",
+        error
+      );
+
       setError(
-        "Unable to connect to the server."
+        error instanceof Error
+          ? error.message
+          : "Failed to load dashboard."
       );
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  // --------------------------------------------------
+  // LOGOUT
+  // --------------------------------------------------
+
   const handleLogout = async () => {
     try {
       await fetch("/api/auth/logout", {
         method: "POST",
       });
-    } finally {
-      window.location.href = "/login";
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
+
+    router.push("/login");
+  };
+
+  // --------------------------------------------------
+  // FORMAT CURRENCY
+  // --------------------------------------------------
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  // --------------------------------------------------
+  // FORMAT DATE
+  // --------------------------------------------------
+
+  const formatDate = (date: string) => {
+    if (!date) return "-";
+
+    return new Date(date).toLocaleDateString(
+      "en-IN",
+      {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }
+    );
+  };
+
+  // --------------------------------------------------
+  // STATUS STYLE
+  // --------------------------------------------------
+
+  const getStatusStyle = (status: string) => {
+    switch (status) {
+      case "Paid":
+      case "Completed":
+        return "bg-green-500/10 text-green-400 border-green-500/20";
+
+      case "Pending":
+        return "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+
+      case "Overdue":
+        return "bg-red-500/10 text-red-400 border-red-500/20";
+
+      case "In Progress":
+        return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+
+      case "Draft":
+        return "bg-gray-500/10 text-gray-400 border-gray-500/20";
+
+      default:
+        return "bg-blue-500/10 text-blue-400 border-blue-500/20";
     }
   };
 
+  // --------------------------------------------------
+  // LOADING
+  // --------------------------------------------------
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center">
+      <div className="min-h-[60vh] text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="w-10 h-10 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4" />
+          <div className="w-10 h-10 border-4 border-gray-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-4" />
 
           <p className="text-gray-400">
             Loading your dashboard...
@@ -150,25 +244,29 @@ export default function ClientDashboardPage() {
     );
   }
 
-  if (error || !data) {
+  // --------------------------------------------------
+  // ERROR
+  // --------------------------------------------------
+
+  if (error) {
     return (
-      <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md bg-[#111113] border border-white/10 rounded-2xl p-8 text-center">
+      <div className="min-h-[60vh] text-white flex items-center justify-center px-6">
+        <div className="bg-[#111827] border border-red-500/20 rounded-2xl p-8 max-w-md w-full text-center">
           <div className="text-4xl mb-4">
             ⚠️
           </div>
 
-          <h1 className="text-xl font-semibold mb-2">
+          <h2 className="text-xl font-semibold mb-2">
             Unable to load dashboard
-          </h1>
+          </h2>
 
-          <p className="text-gray-400 mb-6">
-            {error || "Something went wrong."}
+          <p className="text-gray-400 text-sm mb-6">
+            {error}
           </p>
 
           <button
             onClick={loadDashboard}
-            className="px-5 py-3 bg-white text-black rounded-xl font-medium hover:bg-gray-200"
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg transition"
           >
             Try Again
           </button>
@@ -177,515 +275,629 @@ export default function ClientDashboardPage() {
     );
   }
 
+  if (!data) {
+    return null;
+  }
+
+  // --------------------------------------------------
+  // DASHBOARD
+  // --------------------------------------------------
+
   return (
-    <div className="min-h-screen bg-[#09090b] text-white">
-      {/* NAVBAR */}
+    <div>
 
-      <header className="fixed top-0 left-0 right-0 h-16 bg-[#0d0d0f]/95 backdrop-blur border-b border-white/10 z-50">
-        <div className="h-full px-6 flex items-center justify-between">
-          <Link
-            href="/client/dashboard"
-            className="text-xl font-bold tracking-tight"
-          >
-            Freelancer
-            <span className="text-gray-400">
-              Portal
-            </span>
-          </Link>
+      {/* TOP NAVBAR */}
 
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:block text-right">
-              <p className="text-sm font-medium">
-                {data.client.name}
-              </p>
+      <div className="flex">
 
-              <p className="text-xs text-gray-500">
-                Client
-              </p>
-            </div>
+        {/* SIDEBAR */}
 
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 text-sm rounded-lg border border-white/10 hover:bg-white/5 transition"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+        {/* MAIN CONTENT */}
+        <div className="flex-1 min-w-0 p-4 md:p-8 max-w-[1600px]">
 
-      {/* SIDEBAR */}
-
-      <aside className="fixed top-16 left-0 bottom-0 w-64 bg-[#0d0d0f] border-r border-white/10 hidden md:block">
-        <nav className="p-4 space-y-1">
-          <Link
-            href="/client/dashboard"
-            className="block px-4 py-3 rounded-lg bg-white/10 text-white"
-          >
-            📊 Dashboard
-          </Link>
-
-          <Link
-            href="/client/workspace"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            🏢 My Freelancers
-          </Link>
-
-          <Link
-            href="/client/invoices"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            🧾 Invoices
-          </Link>
-
-          <Link
-            href="/client/payments"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            💳 Payments
-          </Link>
-
-          <Link
-            href="/client/files"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            📎 Files
-          </Link>
-
-          <Link
-            href="/client/messages"
-            className="block px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
-          >
-            💬 Messages
-          </Link>
-        </nav>
-      </aside>
-
-      {/* MAIN */}
-
-      <main className="md:ml-64 pt-16 min-h-screen">
-        <div className="p-6 md:p-8 max-w-7xl mx-auto">
           {/* WELCOME */}
-
           <div className="mb-8">
-            <p className="text-sm text-gray-500 mb-2">
-              Client Portal
-            </p>
 
-            <h1 className="text-3xl md:text-4xl font-bold">
-              Welcome back, {data.client.name}
+            <h1 className="text-3xl font-bold">
+              Welcome back, {data.client.name} 👋
             </h1>
 
             <p className="text-gray-400 mt-2">
-              Manage your freelancers, projects,
-              invoices and payments.
+              Here's an overview of your freelance
+              projects and payments.
             </p>
+
           </div>
 
           {/* STATS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
-              <div className="text-2xl mb-3">
-                👥
+            {/* FREELANCERS */}
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+                  <p className="text-sm text-gray-400">
+                    My Freelancers
+                  </p>
+
+                  <p className="text-3xl font-bold mt-2">
+                    {data.stats.totalFreelancers}
+                  </p>
+                </div>
+
+                <div className="w-11 h-11 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-400 text-xl">
+                  👤
+                </div>
+
               </div>
-
-              <p className="text-sm text-gray-500">
-                My Freelancers
-              </p>
-
-              <p className="text-2xl font-bold mt-1">
-                {data.stats.totalFreelancers}
-              </p>
             </div>
 
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
-              <div className="text-2xl mb-3">
-                📁
+            {/* ACTIVE PROJECTS */}
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+                  <p className="text-sm text-gray-400">
+                    Active Projects
+                  </p>
+
+                  <p className="text-3xl font-bold mt-2">
+                    {data.stats.activeProjects}
+                  </p>
+                </div>
+
+                <div className="w-11 h-11 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-400 text-xl">
+                  📁
+                </div>
+
               </div>
-
-              <p className="text-sm text-gray-500">
-                Active Projects
-              </p>
-
-              <p className="text-2xl font-bold mt-1">
-                {data.stats.activeProjects}
-              </p>
             </div>
 
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
-              <div className="text-2xl mb-3">
-                ⏳
+            {/* PENDING */}
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+                  <p className="text-sm text-gray-400">
+                    Pending Amount
+                  </p>
+
+                  <p className="text-2xl font-bold mt-2">
+                    {formatCurrency(
+                      data.stats.pendingAmount
+                    )}
+                  </p>
+                </div>
+
+                <div className="w-11 h-11 rounded-xl bg-yellow-500/10 flex items-center justify-center text-yellow-400 text-xl">
+                  ₹
+                </div>
+
               </div>
-
-              <p className="text-sm text-gray-500">
-                Pending Invoices
-              </p>
-
-              <p className="text-2xl font-bold mt-1">
-                {formatCurrency(
-                  data.stats.pendingInvoices
-                )}
-              </p>
             </div>
 
-            <div className="bg-[#111113] border border-white/10 rounded-2xl p-5">
-              <div className="text-2xl mb-3">
-                💰
+            {/* TOTAL PAID */}
+            <div className="bg-[#111827] border border-white/10 rounded-2xl p-5">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+                  <p className="text-sm text-gray-400">
+                    Total Paid
+                  </p>
+
+                  <p className="text-2xl font-bold mt-2">
+                    {formatCurrency(
+                      data.stats.totalPaid
+                    )}
+                  </p>
+                </div>
+
+                <div className="w-11 h-11 rounded-xl bg-green-500/10 flex items-center justify-center text-green-400 text-xl">
+                  ✓
+                </div>
+
               </div>
-
-              <p className="text-sm text-gray-500">
-                Total Paid
-              </p>
-
-              <p className="text-2xl font-bold mt-1">
-                {formatCurrency(
-                  data.stats.totalPaid
-                )}
-              </p>
             </div>
+
           </div>
 
           {/* MY FREELANCERS */}
-
           <section className="mb-8">
+
             <div className="flex items-center justify-between mb-5">
+
               <div>
                 <h2 className="text-xl font-semibold">
                   My Freelancers
                 </h2>
 
                 <p className="text-sm text-gray-500 mt-1">
-                  Your active freelancer relationships
+                  Select a freelancer to view your private workspace.
                 </p>
               </div>
+
             </div>
 
             {data.freelancers.length === 0 ? (
-              <div className="bg-[#111113] border border-white/10 rounded-2xl p-10 text-center">
+
+              <div className="bg-[#111827] border border-white/10 rounded-2xl p-10 text-center">
+
                 <div className="text-4xl mb-4">
-                  👥
+                  👤
                 </div>
 
-                <h3 className="text-lg font-semibold mb-2">
+                <h3 className="text-lg font-semibold">
                   No freelancers yet
                 </h3>
 
-                <p className="text-gray-500">
-                  Your freelancer relationships will
-                  appear here once a freelancer adds
-                  your account.
+                <p className="text-gray-500 mt-2">
+                  You don't have any freelancer
+                  relationships connected to this account.
                 </p>
+
               </div>
+
             ) : (
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+
                 {data.freelancers.map(
                   (relationship) => (
+
                     <div
                       key={relationship.id}
-                      className="bg-[#111113] border border-white/10 rounded-2xl p-6 hover:border-white/20 transition"
+                      className="bg-[#111827] border border-white/10 rounded-2xl p-6 hover:border-blue-500/40 transition"
                     >
-                      <div className="flex items-start justify-between mb-5">
-                        <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center text-xl">
-                          👤
+
+                      <div className="flex items-start justify-between">
+
+                        <div className="flex items-center gap-3">
+
+                          <div className="w-12 h-12 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center text-lg font-bold">
+                            {relationship.freelancer?.name
+                              ?.charAt(0)
+                              .toUpperCase() || "F"}
+                          </div>
+
+                          <div>
+
+                            <h3 className="font-semibold">
+                              {relationship.freelancer?.name ||
+                                "Freelancer"}
+                            </h3>
+
+                            <p className="text-xs text-gray-500">
+                              {relationship.freelancer?.email ||
+                                ""}
+                            </p>
+
+                          </div>
+
                         </div>
 
-                        <span className="px-3 py-1 rounded-full text-xs bg-green-500/10 text-green-400">
-                          Connected
-                        </span>
                       </div>
 
-                      <h3 className="text-lg font-semibold">
-                        {relationship.freelancer
-                          ?.name ||
-                          "Freelancer"}
-                      </h3>
+                      <div className="mt-5 space-y-2">
 
-                      <p className="text-sm text-gray-500 mt-1">
-                        {relationship.freelancer
-                          ?.email || ""}
-                      </p>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">
+                            Company
+                          </span>
 
-                      <div className="mt-4 pt-4 border-t border-white/10">
-                        <p className="text-xs text-gray-500">
-                          Company
-                        </p>
+                          <span className="text-gray-300">
+                            {relationship.company}
+                          </span>
+                        </div>
 
-                        <p className="text-sm text-gray-300 mt-1">
-                          {relationship.company}
-                        </p>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">
+                            Client
+                          </span>
+
+                          <span className="text-gray-300">
+                            {relationship.clientName}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between gap-4 text-sm">
+                          <span className="text-gray-500">
+                            Projects
+                          </span>
+                          <span className="text-right text-gray-300">
+                            {relationship.projects?.length
+                              ? relationship.projects.join(", ")
+                              : "No projects yet"}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">
+                            Pending
+                          </span>
+                          <span className="text-yellow-400">
+                            {formatCurrency(relationship.pendingAmount || 0)}
+                          </span>
+                        </div>
+
                       </div>
 
-                      <Link
-                        href={`/client/workspace?freelancer=${relationship.id}`}
-                        className="block text-center mt-5 px-4 py-3 rounded-xl bg-white text-black font-medium hover:bg-gray-200 transition"
+                      <button
+                        onClick={() =>
+                          router.push(
+                            `/client/workspace?freelancer=${relationship.freelancer?.id || ""}`
+                          )
+                        }
+                        className="w-full mt-6 px-4 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 transition font-medium"
                       >
                         Open Workspace →
-                      </Link>
+                      </button>
+
                     </div>
+
                   )
                 )}
+
               </div>
+
             )}
+
           </section>
 
-          {/* RECENT PROJECTS */}
+          {/* RECENT PROJECTS + INVOICES */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-8">
 
-          <section className="bg-[#111113] border border-white/10 rounded-2xl overflow-hidden mb-8">
-            <div className="p-6 border-b border-white/10">
-              <h2 className="text-lg font-semibold">
-                Recent Projects
-              </h2>
+            {/* PROJECTS */}
+            <section className="bg-[#111827] border border-white/10 rounded-2xl p-6">
 
-              <p className="text-sm text-gray-500 mt-1">
-                Your latest project activity
-              </p>
-            </div>
+              <div className="flex items-center justify-between mb-5">
 
-            {data.recentProjects.length === 0 ? (
-              <div className="p-10 text-center text-gray-500">
-                No projects available.
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    Recent Projects
+                  </h2>
+
+                  <p className="text-sm text-gray-500">
+                    Your latest projects
+                  </p>
+                </div>
+
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-white/10 text-left">
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Project
-                      </th>
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Freelancer
-                      </th>
+              {data.recentProjects.length === 0 ? (
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Budget
-                      </th>
+                <p className="text-gray-500 text-sm">
+                  No projects available.
+                </p>
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Deadline
-                      </th>
+              ) : (
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Status
-                      </th>
-                    </tr>
-                  </thead>
+                <div className="space-y-4">
 
-                  <tbody>
-                    {data.recentProjects.map(
-                      (project) => (
-                        <tr
-                          key={project.id}
-                          className="border-b border-white/5 hover:bg-white/[0.02]"
-                        >
-                          <td className="px-6 py-4">
-                            <p className="font-medium">
+                  {data.recentProjects.map(
+                    (project) => (
+
+                      <div
+                        key={project.id}
+                        className="border border-white/10 rounded-xl p-4"
+                      >
+
+                        <div className="flex justify-between gap-4">
+
+                          <div>
+
+                            <h3 className="font-medium">
                               {project.name}
+                            </h3>
+
+                            <p className="text-xs text-gray-500 mt-1">
+                              Freelancer:{" "}
+                              {project.freelancer}
                             </p>
-                          </td>
 
-                          <td className="px-6 py-4 text-gray-400">
-                            {project.freelancer}
-                          </td>
+                          </div>
 
-                          <td className="px-6 py-4">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-xs border h-fit ${getStatusStyle(
+                              project.status
+                            )}`}
+                          >
+                            {project.status}
+                          </span>
+
+                        </div>
+
+                        <div className="flex justify-between mt-4 text-sm">
+
+                          <span className="text-gray-500">
+                            Budget
+                          </span>
+
+                          <span>
                             {formatCurrency(
                               project.budget
                             )}
-                          </td>
+                          </span>
 
-                          <td className="px-6 py-4 text-gray-400">
+                        </div>
+
+                        <div className="flex justify-between mt-2 text-sm">
+                          <span className="text-gray-500">Paid</span>
+                          <span className="text-green-400">
+                            {formatCurrency(project.paidAmount)}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between mt-2 text-sm">
+                          <span className="text-gray-500">Pending</span>
+                          <span className="text-yellow-400">
+                            {formatCurrency(project.pendingAmount)}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between mt-2 text-sm">
+
+                          <span className="text-gray-500">
+                            Deadline
+                          </span>
+
+                          <span>
                             {formatDate(
                               project.deadline
                             )}
-                          </td>
+                          </span>
 
-                          <td className="px-6 py-4">
-                            <span className="px-3 py-1 rounded-full text-xs bg-blue-500/10 text-blue-400">
-                              {project.status}
-                            </span>
-                          </td>
-                        </tr>
-                      )
-                    )}
-                  </tbody>
-                </table>
+                        </div>
+
+                      </div>
+
+                    )
+                  )}
+
+                </div>
+
+              )}
+
+            </section>
+
+            {/* INVOICES */}
+            <section className="bg-[#111827] border border-white/10 rounded-2xl p-6">
+
+              <div className="flex items-center justify-between mb-5">
+
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    Recent Invoices
+                  </h2>
+
+                  <p className="text-sm text-gray-500">
+                    Your latest invoices
+                  </p>
+                </div>
+
               </div>
-            )}
-          </section>
 
-          {/* RECENT INVOICES */}
+              {data.recentInvoices.length === 0 ? (
 
-          <section className="bg-[#111113] border border-white/10 rounded-2xl overflow-hidden mb-8">
-            <div className="p-6 border-b border-white/10">
-              <h2 className="text-lg font-semibold">
-                Recent Invoices
-              </h2>
+                <p className="text-gray-500 text-sm">
+                  No invoices available.
+                </p>
 
-              <p className="text-sm text-gray-500 mt-1">
-                Your latest invoices
-              </p>
-            </div>
+              ) : (
 
-            {data.recentInvoices.length === 0 ? (
-              <div className="p-10 text-center text-gray-500">
-                No invoices available.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-white/10 text-left">
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Invoice
-                      </th>
+                <div className="space-y-4">
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Project
-                      </th>
+                  {data.recentInvoices.map(
+                    (invoice) => (
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Amount
-                      </th>
+                      <div
+                        key={invoice.id}
+                        className="border border-white/10 rounded-xl p-4"
+                      >
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Due Date
-                      </th>
+                        <div className="flex justify-between gap-4">
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
-                        Status
-                      </th>
-                    </tr>
-                  </thead>
+                          <div>
 
-                  <tbody>
-                    {data.recentInvoices.map(
-                      (invoice) => (
-                        <tr
-                          key={invoice.id}
-                          className="border-b border-white/5 hover:bg-white/[0.02]"
-                        >
-                          <td className="px-6 py-4 font-medium">
-                            {invoice.invoiceNumber}
-                          </td>
+                            <h3 className="font-medium">
+                              {invoice.invoiceNumber}
+                            </h3>
 
-                          <td className="px-6 py-4 text-gray-400">
-                            {invoice.project}
-                          </td>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {invoice.project}
+                            </p>
 
-                          <td className="px-6 py-4">
-                            {formatCurrency(
-                              invoice.amount
-                            )}
-                          </td>
+                          </div>
 
-                          <td className="px-6 py-4 text-gray-400">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-xs border h-fit ${getStatusStyle(
+                              invoice.status
+                            )}`}
+                          >
+                            {invoice.status}
+                          </span>
+
+                        </div>
+
+                        <div className="flex justify-between mt-4 text-sm">
+
+                          <span className="text-gray-500">
+                            Amount
+                          </span>
+
+                          <span className="font-medium">
+                            {formatCurrency(invoice.amount)}
+                          </span>
+
+                        </div>
+
+                        <div className="flex justify-between mt-2 text-sm">
+                          <span className="text-gray-500">Paid</span>
+                          <span className="text-green-400">
+                            {formatCurrency(invoice.paidAmount)}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between mt-2 text-sm">
+                          <span className="text-gray-500">Project Pending</span>
+                          <span className="text-yellow-400">
+                            {formatCurrency(invoice.projectPendingAmount)}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between mt-2 text-sm">
+
+                          <span className="text-gray-500">
+                            Due Date
+                          </span>
+
+                          <span>
                             {formatDate(
                               invoice.dueDate
                             )}
-                          </td>
+                          </span>
 
-                          <td className="px-6 py-4">
-                            <span className="px-3 py-1 rounded-full text-xs bg-yellow-500/10 text-yellow-400">
-                              {invoice.status}
-                            </span>
-                          </td>
-                        </tr>
-                      )
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+                        </div>
+
+                      </div>
+
+                    )
+                  )}
+
+                </div>
+
+              )}
+
+            </section>
+
+          </div>
 
           {/* RECENT PAYMENTS */}
+          <section className="bg-[#111827] border border-white/10 rounded-2xl p-6">
 
-          <section className="bg-[#111113] border border-white/10 rounded-2xl overflow-hidden">
-            <div className="p-6 border-b border-white/10">
+            <div className="mb-5">
+
               <h2 className="text-lg font-semibold">
                 Recent Payments
               </h2>
 
               <p className="text-sm text-gray-500 mt-1">
-                Your latest payment activity
+                Your recent payment activity
               </p>
+
             </div>
 
             {data.recentPayments.length === 0 ? (
-              <div className="p-10 text-center text-gray-500">
+
+              <p className="text-gray-500 text-sm">
                 No payments available.
-              </div>
+              </p>
+
             ) : (
+
               <div className="overflow-x-auto">
-                <table className="w-full">
+
+                <table className="w-full text-sm">
+
                   <thead>
-                    <tr className="border-b border-white/10 text-left">
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
+
+                    <tr className="border-b border-white/10 text-gray-500">
+
+                      <th className="text-left py-3 font-medium">
                         Invoice
                       </th>
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
+                      <th className="text-left py-3 font-medium">
                         Project
                       </th>
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
+                      <th className="text-left py-3 font-medium">
                         Amount
                       </th>
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
+                      <th className="text-left py-3 font-medium">
                         Method
                       </th>
 
-                      <th className="px-6 py-4 text-xs text-gray-500 uppercase">
+                      <th className="text-left py-3 font-medium">
                         Date
                       </th>
+
+                      <th className="text-left py-3 font-medium">
+                        Status
+                      </th>
+
                     </tr>
+
                   </thead>
 
                   <tbody>
+
                     {data.recentPayments.map(
                       (payment) => (
+
                         <tr
                           key={payment.id}
-                          className="border-b border-white/5 hover:bg-white/[0.02]"
+                          className="border-b border-white/5 last:border-0"
                         >
-                          <td className="px-6 py-4 font-medium">
+
+                          <td className="py-4">
                             {payment.invoice}
                           </td>
 
-                          <td className="px-6 py-4 text-gray-400">
+                          <td className="py-4 text-gray-400">
                             {payment.project}
                           </td>
 
-                          <td className="px-6 py-4">
+                          <td className="py-4 font-medium">
                             {formatCurrency(
                               payment.amount
                             )}
                           </td>
 
-                          <td className="px-6 py-4 text-gray-400">
+                          <td className="py-4 text-gray-400">
                             {payment.paymentMethod}
                           </td>
 
-                          <td className="px-6 py-4 text-gray-400">
+                          <td className="py-4 text-gray-400">
                             {formatDate(
                               payment.paymentDate
                             )}
                           </td>
+
+                          <td className="py-4">
+
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-xs border ${getStatusStyle(
+                                payment.status
+                              )}`}
+                            >
+                              {payment.status}
+                            </span>
+
+                          </td>
+
                         </tr>
+
                       )
                     )}
+
                   </tbody>
+
                 </table>
+
               </div>
+
             )}
+
           </section>
+
         </div>
-      </main>
+      </div>
     </div>
   );
 }

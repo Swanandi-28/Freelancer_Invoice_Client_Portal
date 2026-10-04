@@ -13,7 +13,7 @@ export type AuthUser = {
   id: string;
   name: string;
   email: string;
-  role: "freelancer" | "client";
+  role: "freelancer" | "client" | "admin";
 };
 
 export async function createToken(user: AuthUser) {
@@ -45,7 +45,9 @@ export async function getAuthenticatedUser(): Promise<AuthUser | null> {
       typeof payload.id !== "string" ||
       typeof payload.name !== "string" ||
       typeof payload.email !== "string" ||
-      (payload.role !== "freelancer" && payload.role !== "client")
+      (payload.role !== "freelancer" &&
+        payload.role !== "client" &&
+        payload.role !== "admin")
     ) {
       return null;
     }

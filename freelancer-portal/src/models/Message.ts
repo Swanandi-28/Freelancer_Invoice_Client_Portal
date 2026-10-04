@@ -69,6 +69,14 @@ MessageSchema.index({
   createdAt: -1,
 });
 
+// Unread counts: "messages in this conversation, sent by the other
+// side, not read yet".
+MessageSchema.index({
+  client: 1,
+  senderRole: 1,
+  read: 1,
+});
+
 const Message: Model<IMessage> =
   mongoose.models.Message ||
   mongoose.model<IMessage>("Message", MessageSchema);

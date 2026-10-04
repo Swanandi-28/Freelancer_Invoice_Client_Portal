@@ -1,137 +1,126 @@
 import { NextResponse } from "next/server";
 
-import connectDB from "@/lib/mongodb";
 import Client from "@/models/Client";
 import User from "@/models/User";
-import { getAuthenticatedUser } from "@/lib/auth";
+import Project from "@/models/Project";
+import Invoice from "@/models/Invoice";
+import { sum, withInvoiceAmounts, withProjectAmounts } from "@/lib/finance";
+import { requireUser } from "@/lib/access";
+import { cleanString, fail, isEmail, readJson, serverError } from "@/lib/api";
 
+// =====================================================
+// GET CLIENTS (freelancer's own client relationships)
+// =====================================================
 export async function GET() {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser("freelancer");
+    if (auth.response) return auth.response;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
+    const [clients, rawProjects, rawInvoices] = await Promise.all([
+      Client.find({ freelancer: auth.user.id })
+        .populate("user", "name email role")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Project.find({ freelancer: auth.user.id }).select("client status budget").lean(),
+      Invoice.find({ freelancer: auth.user.id })
+        .select("client amount dueDate status")
+        .lean(),
+    ]);
+
+    const projects = await withProjectAmounts(rawProjects);
+    const invoices = await withInvoiceAmounts(rawInvoices);
+
+    // Per-client totals are calculated here, from the database,
+    // so the page never has to work them out itself.
+    const clientsWithStats = clients.map((client) => {
+      const id = client._id.toString();
+      const ownProjects = projects.filter(
+        (project) => project.client.toString() === id
       );
-    }
-
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can access clients.",
-        },
-        { status: 403 }
+      const ownInvoices = invoices.filter(
+        (invoice) => invoice.client.toString() === id && invoice.status !== "Draft"
       );
-    }
 
-    await connectDB();
-
-    const clients = await Client.find({
-      freelancer: user.id,
-    })
-      .populate("user", "name email role")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    return NextResponse.json({
-      success: true,
-      clients,
+      return {
+        ...client,
+        isConnected: Boolean(client.user),
+        projectCount: ownProjects.length,
+        activeProjectCount: ownProjects.filter(
+          (project) => project.status === "In Progress"
+        ).length,
+        // Revenue = completed payments received from this client
+        revenue: sum(ownProjects.map((project) => project.paidAmount)),
+        // Project level: budget - completed payments of each project
+        pendingAmount: sum(ownProjects.map((project) => project.pendingAmount)),
+        // Unpaid balance of issued invoices only
+        pendingInvoiceAmount: sum(ownInvoices.map((invoice) => invoice.pendingAmount)),
+      };
     });
-  } catch (error) {
-    console.error("Get clients error:", error);
 
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to load clients.",
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, clients: clientsWithStats });
+  } catch (error) {
+    return serverError("Get clients error", error, "Failed to load clients.");
   }
 }
 
+// =====================================================
+// ADD CLIENT
+// =====================================================
 export async function POST(request: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser("freelancer");
+    if (auth.response) return auth.response;
+    const user = auth.user;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
+    const body = await readJson(request);
+    if (!body) return fail("Invalid request body.", 400);
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can add clients.",
-        },
-        { status: 403 }
-      );
-    }
-
-    await connectDB();
-
-    const body = await request.json();
-
-    const name = body.name?.trim();
-    const company = body.company?.trim();
-    const email = body.email?.toLowerCase().trim();
+    const name = cleanString(body.name, 100);
+    const company = cleanString(body.company, 150);
+    const email = cleanString(body.email, 254).toLowerCase();
 
     if (!name || !company || !email) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Name, company and email are required.",
-        },
-        { status: 400 }
-      );
+      return fail("Name, company and email are required.", 400);
     }
 
-    // Check whether a client with this email
-    // is already connected to this freelancer.
+    if (!isEmail(email)) {
+      return fail("Please enter a valid client email address.", 400);
+    }
+
+    if (email === user.email.toLowerCase()) {
+      return fail("You cannot add yourself as a client.", 400);
+    }
+
+    // One relationship per freelancer + client email. No duplicates.
     const existingClient = await Client.findOne({
       freelancer: user.id,
       email,
     });
 
     if (existingClient) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "This client is already added.",
-        },
-        { status: 409 }
-      );
+      return fail("This client is already added.", 409);
     }
 
-    // Find the client's login account.
-    const clientUser = await User.findOne({
-      email,
-      role: "client",
-    });
+    // If the client has already registered, connect the relationship
+    // to their login account straight away.
+    const clientUser = await User.findOne({ email, role: "client" });
 
-    /*
-      If the client has already registered,
-      automatically connect the Client record
-      to their User account.
-    */
-    const client = await Client.create({
-      freelancer: user.id,
-      user: clientUser ? clientUser._id : undefined,
-      name,
-      company,
-      email,
-    });
+    let client;
+
+    try {
+      client = await Client.create({
+        freelancer: user.id,
+        user: clientUser ? clientUser._id : undefined,
+        name,
+        company,
+        email,
+      });
+    } catch (error) {
+      if ((error as { code?: number })?.code === 11000) {
+        return fail("This client is already added.", 409);
+      }
+      throw error;
+    }
 
     const populatedClient = await Client.findById(client._id)
       .populate("user", "name email role")
@@ -148,14 +137,6 @@ export async function POST(request: Request) {
       { status: 201 }
     );
   } catch (error) {
-    console.error("Create client error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to create client.",
-      },
-      { status: 500 }
-    );
+    return serverError("Create client error", error, "Failed to create client.");
   }
 }

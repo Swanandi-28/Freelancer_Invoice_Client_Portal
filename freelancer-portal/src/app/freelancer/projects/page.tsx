@@ -15,6 +15,10 @@ interface Project {
   name: string;
   description: string;
   budget: number;
+  // From the server: completed payments of this project, and
+  // pendingAmount = budget - paidAmount
+  paidAmount?: number;
+  pendingAmount?: number;
   deadline: string;
   status: string;
   client: Client;
@@ -36,31 +40,15 @@ export default function ProjectsPage() {
   const [message, setMessage] = useState("");
 
   const [search, setSearch] = useState("");
-
-  const getUser = () => {
-    if (typeof window === "undefined") return null;
-
-    const user = localStorage.getItem("user");
-
-    if (!user) return null;
-
-    try {
-      return JSON.parse(user);
-    } catch {
-      return null;
-    }
-  };
+  const [pageLoading, setPageLoading] = useState(true);
 
   const loadData = async () => {
-    const user = getUser();
-
-    if (!user?.id) return;
-
     try {
+      // The server identifies the freelancer from the auth cookie.
       const [clientsResponse, projectsResponse] =
         await Promise.all([
-          fetch(`/api/clients?freelancerId=${user.id}`),
-          fetch("/api/projects"),
+          fetch("/api/clients", { cache: "no-store" }),
+          fetch("/api/projects", { cache: "no-store" }),
         ]);
 
       const clientsData = await clientsResponse.json();
@@ -73,8 +61,19 @@ export default function ProjectsPage() {
       if (projectsData.success) {
         setProjects(projectsData.projects);
       }
+
+      if (!clientsResponse.ok || !projectsResponse.ok) {
+        setMessage(
+          clientsData.message ||
+            projectsData.message ||
+            "Failed to load projects."
+        );
+      }
     } catch (error) {
       console.error("Failed to load data:", error);
+      setMessage("Unable to load projects from the server.");
+    } finally {
+      setPageLoading(false);
     }
   };
 
@@ -88,13 +87,6 @@ export default function ProjectsPage() {
     e.preventDefault();
 
     setMessage("");
-
-    const user = getUser();
-
-    if (!user?.id) {
-      setMessage("Please login first.");
-      return;
-    }
 
     try {
       setLoading(true);
@@ -150,100 +142,19 @@ export default function ProjectsPage() {
   });
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <div>
 
       {/* Navbar */}
-      <nav className="border-b border-slate-800 bg-slate-900">
-        <div className="flex items-center justify-between px-6 py-4">
-
-          <Link
-            href="/freelancer/dashboard"
-            className="text-xl font-bold text-blue-400"
-          >
-            FreelancerPortal
-          </Link>
-
-          <Link
-            href="/freelancer/dashboard"
-            className="text-sm text-slate-400 hover:text-white"
-          >
-            Dashboard
-          </Link>
-
-        </div>
-      </nav>
 
       <div className="flex">
 
         {/* Sidebar */}
-        <aside className="w-64 min-h-[calc(100vh-73px)] border-r border-slate-800 bg-slate-900 p-5">
-
-          <div className="space-y-2">
-
-            <Link
-              href="/freelancer/dashboard"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/freelancer/clients"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Clients
-            </Link>
-
-            <Link
-              href="/freelancer/projects"
-              className="block px-4 py-3 rounded-lg bg-blue-600"
-            >
-              Projects
-            </Link>
-
-            <Link
-              href="/freelancer/invoices"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Invoices
-            </Link>
-
-            <Link
-              href="/freelancer/payments"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Payments
-            </Link>
-
-            <Link
-              href="/freelancer/files"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Files
-            </Link>
-
-            <Link
-              href="/freelancer/messages"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Messages
-            </Link>
-
-            <Link
-              href="/freelancer/reports"
-              className="block px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800"
-            >
-              Reports
-            </Link>
-
-          </div>
-        </aside>
 
         {/* Main */}
-        <section className="flex-1 p-8">
+        <section className="flex-1 min-w-0 p-4 md:p-8">
 
           {/* Heading */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
 
             <div>
               <h1 className="text-3xl font-bold">
@@ -275,7 +186,7 @@ export default function ProjectsPage() {
           {showForm && (
             <form
               onSubmit={handleCreateProject}
-              className="mb-8 bg-slate-900 border border-slate-800 rounded-xl p-6"
+              className="mb-8 bg-[#111827] border border-white/10 rounded-xl p-6"
             >
 
               <h2 className="text-xl font-semibold mb-5">
@@ -290,14 +201,14 @@ export default function ProjectsPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 />
 
                 <select
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
                   required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 >
                   <option value="">Select Client</option>
 
@@ -317,7 +228,7 @@ export default function ProjectsPage() {
                   onChange={(e) =>
                     setDescription(e.target.value)
                   }
-                  className="md:col-span-2 px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="md:col-span-2 px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                   rows={3}
                 />
 
@@ -330,7 +241,7 @@ export default function ProjectsPage() {
                   }
                   required
                   min="0"
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 />
 
                 <input
@@ -340,7 +251,7 @@ export default function ProjectsPage() {
                     setDeadline(e.target.value)
                   }
                   required
-                  className="px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 outline-none focus:border-blue-500"
+                  className="px-4 py-3 rounded-lg bg-[#0b0f19] border border-white/10 outline-none focus:border-blue-500"
                 />
 
               </div>
@@ -360,7 +271,7 @@ export default function ProjectsPage() {
                 <button
                   type="button"
                   onClick={() => setShowForm(false)}
-                  className="px-5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700"
+                  className="px-5 py-2.5 rounded-lg bg-white/10 hover:bg-white/20"
                 >
                   Cancel
                 </button>
@@ -380,7 +291,7 @@ export default function ProjectsPage() {
               onChange={(e) =>
                 setSearch(e.target.value)
               }
-              className="w-full max-w-md px-4 py-3 rounded-lg bg-slate-900 border border-slate-800 outline-none focus:border-blue-500"
+              className="w-full max-w-md px-4 py-3 rounded-lg bg-[#111827] border border-white/10 outline-none focus:border-blue-500"
             />
 
           </div>
@@ -388,8 +299,14 @@ export default function ProjectsPage() {
           {/* Project Cards */}
           {filteredProjects.length === 0 ? (
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center text-slate-400">
-              No projects found. Create your first project.
+            <div className="bg-[#111827] border border-white/10 rounded-xl p-12 text-center text-slate-400">
+              {pageLoading
+                ? "Loading projects..."
+                : projects.length === 0
+                  ? clients.length === 0
+                    ? "No projects found. Add a client first, then create a project."
+                    : "No projects found. Create your first project."
+                  : "No projects match your search."}
             </div>
 
           ) : (
@@ -400,7 +317,7 @@ export default function ProjectsPage() {
 
                 <div
                   key={project._id}
-                  className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:border-slate-700 transition"
+                  className="bg-[#111827] border border-white/10 rounded-xl p-6 hover:border-white/20 transition"
                 >
 
                   <div className="flex items-start justify-between gap-4">
@@ -434,7 +351,27 @@ export default function ProjectsPage() {
                       </span>
 
                       <span className="font-semibold">
-                        ₹{project.budget.toLocaleString()}
+                        ₹{project.budget.toLocaleString("en-IN")}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">
+                        Paid
+                      </span>
+
+                      <span className="text-green-400">
+                        ₹{(project.paidAmount ?? 0).toLocaleString("en-IN")}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">
+                        Pending
+                      </span>
+
+                      <span className="text-yellow-400">
+                        ₹{(project.pendingAmount ?? project.budget).toLocaleString("en-IN")}
                       </span>
                     </div>
 
@@ -464,6 +401,6 @@ export default function ProjectsPage() {
 
       </div>
 
-    </main>
+    </div>
   );
 }

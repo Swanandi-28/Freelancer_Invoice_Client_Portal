@@ -1,304 +1,224 @@
 import { NextResponse } from "next/server";
-import connectDB from "@/lib/mongodb";
+
 import Invoice from "@/models/Invoice";
 import Client from "@/models/Client";
 import Project from "@/models/Project";
-import { getAuthenticatedUser } from "@/lib/auth";
+import { requireUser, resolveScope } from "@/lib/access";
+import { withInvoiceAmounts, withProjectTotals } from "@/lib/finance";
+import {
+  cleanString,
+  fail,
+  isObjectId,
+  parseAmount,
+  parseDate,
+  readJson,
+  serverError,
+} from "@/lib/api";
 
 // =====================================================
-// GET ALL INVOICES
+// GET INVOICES
+// Every invoice is returned with:
+//   amount, paidAmount, pendingAmount, status
+// calculated on the server from the Completed payments
+// of THAT invoice.
 // =====================================================
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const auth = await requireUser();
+    if (auth.response) return auth.response;
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
+    const scoped = await resolveScope(
+      auth.user,
+      new URL(request.url).searchParams
+    );
+    if (scoped.response) return scoped.response;
+
+    const filter: Record<string, unknown> = { ...scoped.scope.filter };
+
+    // Clients never see invoices that are still drafts.
+    if (auth.user.role === "client") {
+      filter.status = { $ne: "Draft" };
     }
 
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can access invoices.",
-        },
-        { status: 403 }
-      );
-    }
-
-    await connectDB();
-
-    const invoices = await Invoice.find({
-      freelancer: user.id,
-    })
+    const invoices = await Invoice.find(filter)
       .populate("client", "name company email")
-      .populate("project", "name")
+      .populate("project", "name budget")
+      .populate("freelancer", "name email")
       .sort({ createdAt: -1 })
       .lean();
 
     return NextResponse.json({
       success: true,
-      invoices,
+      // Invoice totals + the totals of the project each invoice belongs to.
+      invoices: await withProjectTotals(await withInvoiceAmounts(invoices)),
     });
   } catch (error) {
-    console.error("Get invoices error:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to load invoices.",
-      },
-      { status: 500 }
-    );
+    return serverError("Get invoices error", error, "Failed to fetch invoices.");
   }
 }
 
 // =====================================================
-// CREATE INVOICE
+// CREATE INVOICE (freelancer only)
+// Validates: freelancer -> client -> project
 // =====================================================
-
 export async function POST(request: Request) {
   try {
-    // -------------------------------------------------
-    // AUTHENTICATION
-    // -------------------------------------------------
+    const auth = await requireUser("freelancer");
+    if (auth.response) return auth.response;
+    const user = auth.user;
 
-    const user = await getAuthenticatedUser();
+    const body = await readJson(request);
+    if (!body) return fail("Invalid request body.", 400);
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Unauthorized.",
-        },
-        { status: 401 }
-      );
-    }
-
-    if (user.role !== "freelancer") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Only freelancers can create invoices.",
-        },
-        { status: 403 }
-      );
-    }
-
-    // -------------------------------------------------
-    // DATABASE
-    // -------------------------------------------------
-
-    await connectDB();
-
-    // -------------------------------------------------
-    // REQUEST DATA
-    // -------------------------------------------------
-
-    const body = await request.json();
-
-    const {
-      clientId,
-      projectId,
-      amount,
-      issueDate,
-      dueDate,
-      status,
-    } = body;
-
-    // -------------------------------------------------
-    // VALIDATION
-    // -------------------------------------------------
+    const { clientId, projectId } = body;
+    // Optional. When empty, the next INV-00N for this freelancer is generated.
+    let invoiceNumber = cleanString(body.invoiceNumber, 40);
+    const status = body.status || "Pending";
 
     if (
       !clientId ||
       !projectId ||
-      amount === undefined ||
-      !issueDate ||
-      !dueDate
+      body.amount === undefined ||
+      body.amount === "" ||
+      !body.issueDate ||
+      !body.dueDate
     ) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "All required fields must be provided.",
-        },
-        { status: 400 }
+      return fail("All required invoice fields must be provided.", 400);
+    }
+
+    if (!isObjectId(clientId) || !isObjectId(projectId)) {
+      return fail("Invalid client or project id.", 400);
+    }
+
+    if (
+      invoiceNumber &&
+      !/^[A-Za-z0-9][A-Za-z0-9\-_/#.]{0,29}$/.test(invoiceNumber)
+    ) {
+      return fail(
+        "Invoice number may only contain letters, numbers, '-', '_', '/', '#', '.' (max 30 characters).",
+        400
       );
     }
 
-    if (Number(amount) <= 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Invoice amount must be greater than zero.",
-        },
-        { status: 400 }
-      );
+    const invoiceAmount = parseAmount(body.amount);
+
+    if (invoiceAmount === null) {
+      return fail("Invoice amount must be greater than 0.", 400);
     }
 
-    if (new Date(dueDate) < new Date(issueDate)) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Due date cannot be before issue date.",
-        },
-        { status: 400 }
-      );
+    const issueDate = parseDate(body.issueDate);
+    const dueDate = parseDate(body.dueDate);
+
+    if (!issueDate || !dueDate) {
+      return fail("Issue date and due date must be valid dates.", 400);
     }
 
-    // -------------------------------------------------
-    // VERIFY CLIENT
-    // -------------------------------------------------
+    if (dueDate.getTime() < issueDate.getTime()) {
+      return fail("Due date cannot be before the issue date.", 400);
+    }
 
-    const client = await Client.findOne({
-      _id: clientId,
-      freelancer: user.id,
-    });
+    // A new invoice can only start as Draft or Pending.
+    // Paid / Overdue are calculated from payments and the due date.
+    if (status !== "Draft" && status !== "Pending") {
+      return fail("A new invoice must be Draft or Pending.", 400);
+    }
+
+    // Client must belong to this freelancer.
+    const client = await Client.findOne({ _id: clientId, freelancer: user.id });
 
     if (!client) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Invalid client or client does not belong to you.",
-        },
-        { status: 403 }
-      );
+      return fail("Client not found.", 404);
     }
 
-    // -------------------------------------------------
-    // VERIFY PROJECT
-    // -------------------------------------------------
-
+    // Project must belong to this freelancer AND this client.
     const project = await Project.findOne({
       _id: projectId,
       freelancer: user.id,
-      client: clientId,
+      client: client._id,
     });
 
     if (!project) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Invalid project or project does not belong to this client.",
-        },
-        { status: 403 }
-      );
+      return fail("This project does not belong to the selected client.", 400);
     }
 
-    // -------------------------------------------------
-    // GENERATE UNIQUE INVOICE NUMBER
-    // -------------------------------------------------
-    //
-    // Invoice numbers are globally unique.
-    //
-    // Example:
-    //
-    // INV-001
-    // INV-002
-    // INV-003
-    //
-    // We check ALL invoices, not just this freelancer's
-    // invoices.
-    // -------------------------------------------------
+    const invoiceData = {
+      freelancer: user.id,
+      client: client._id,
+      project: project._id,
+      amount: invoiceAmount,
+      issueDate,
+      dueDate,
+      status: status as "Draft" | "Pending",
+    };
 
-    const latestInvoice = await Invoice.findOne({
-      invoiceNumber: /^INV-\d+$/,
-    })
-      .sort({ invoiceNumber: -1 })
-      .select("invoiceNumber")
-      .lean();
+    let invoice;
 
-    let nextNumber = 1;
+    if (invoiceNumber) {
+      // ---------- Number chosen by the freelancer ----------
+      const existingInvoice = await Invoice.findOne({
+        freelancer: user.id,
+        invoiceNumber,
+      });
 
-    if (latestInvoice?.invoiceNumber) {
-      const match = latestInvoice.invoiceNumber.match(/\d+$/);
+      if (existingInvoice) {
+        return fail("Invoice number already exists.", 409);
+      }
 
-      if (match) {
-        nextNumber = parseInt(match[0], 10) + 1;
+      try {
+        invoice = await Invoice.create({ ...invoiceData, invoiceNumber });
+      } catch (error) {
+        if ((error as { code?: number })?.code === 11000) {
+          return fail("Invoice number already exists.", 409);
+        }
+        throw error;
+      }
+    } else {
+      // ---------- Automatic number: INV-001, INV-002, ... per freelancer ----------
+      const existingNumbers = await Invoice.find({ freelancer: user.id })
+        .select("invoiceNumber")
+        .lean();
+
+      let next =
+        existingNumbers.reduce((highest, item) => {
+          const match = /^INV-(\d+)$/i.exec(item.invoiceNumber || "");
+          return match ? Math.max(highest, Number(match[1])) : highest;
+        }, 0) + 1;
+
+      for (let attempt = 0; attempt < 5 && !invoice; attempt += 1) {
+        invoiceNumber = `INV-${String(next).padStart(3, "0")}`;
+
+        try {
+          invoice = await Invoice.create({ ...invoiceData, invoiceNumber });
+        } catch (error) {
+          // Number taken by a simultaneous request: try the next one.
+          if ((error as { code?: number })?.code !== 11000) throw error;
+          next += 1;
+        }
+      }
+
+      if (!invoice) {
+        return fail("Could not generate an invoice number. Please try again.", 409);
       }
     }
 
-    let invoiceNumber = `INV-${String(nextNumber).padStart(3, "0")}`;
-
-    // -------------------------------------------------
-    // EXTRA SAFETY CHECK
-    // -------------------------------------------------
-    //
-    // If the generated number somehow already exists,
-    // keep increasing until we find a free number.
-    // -------------------------------------------------
-
-    while (
-      await Invoice.exists({
-        invoiceNumber,
-      })
-    ) {
-      nextNumber++;
-
-      invoiceNumber = `INV-${String(nextNumber).padStart(3, "0")}`;
-    }
-
-    // -------------------------------------------------
-    // CREATE INVOICE
-    // -------------------------------------------------
-
-    const invoice = await Invoice.create({
-      freelancer: user.id,
-      client: clientId,
-      project: projectId,
-      invoiceNumber,
-      amount: Number(amount),
-      issueDate: new Date(issueDate),
-      dueDate: new Date(dueDate),
-      status: status || "Pending",
-    });
-
-    // -------------------------------------------------
-    // RETURN CREATED INVOICE
-    // -------------------------------------------------
-
-    const populatedInvoice = await Invoice.findById(invoice._id)
+    const populated = await Invoice.findById(invoice._id)
       .populate("client", "name company email")
-      .populate("project", "name")
+      .populate("project", "name budget")
       .lean();
+
+    const [invoiceWithAmounts] = await withInvoiceAmounts(
+      populated ? [populated] : []
+    );
 
     return NextResponse.json(
       {
         success: true,
         message: "Invoice created successfully.",
-        invoice: populatedInvoice,
+        invoice: invoiceWithAmounts,
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Create invoice error:", error);
-
-    // MongoDB duplicate-key error
-    if (error?.code === 11000) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Invoice number conflict. Please try creating the invoice again.",
-        },
-        { status: 409 }
-      );
-    }
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: "Failed to create invoice.",
-      },
-      { status: 500 }
-    );
+  } catch (error) {
+    return serverError("Create invoice error", error, "Failed to create invoice.");
   }
 }

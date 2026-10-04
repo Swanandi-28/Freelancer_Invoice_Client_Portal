@@ -1,205 +1,148 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 
-const initialFiles = [
-  {
-    id: 1,
-    name: "project-requirements.pdf",
-    freelancer: "Rahul Sharma",
-    project: "E-commerce Website",
-    type: "PDF",
-    size: "1.2 MB",
-    date: "20 Sep 2026",
-  },
-  {
-    id: 2,
-    name: "homepage-design.fig",
-    freelancer: "Rahul Sharma",
-    project: "E-commerce Website",
-    type: "Design",
-    size: "4.8 MB",
-    date: "22 Sep 2026",
-  },
-  {
-    id: 3,
-    name: "brand-logo.zip",
-    freelancer: "Priya Mehta",
-    project: "Brand Identity Design",
-    type: "Archive",
-    size: "8.5 MB",
-    date: "24 Sep 2026",
-  },
-  {
-    id: 4,
-    name: "mobile-wireframes.pdf",
-    freelancer: "Priya Mehta",
-    project: "Brand Identity Design",
-    type: "PDF",
-    size: "2.4 MB",
-    date: "26 Sep 2026",
-  },
-];
+import { useApiList } from "@/components/useApiList";
+import {
+  EmptyState,
+  ErrorBanner,
+  LoadingState,
+  PageHeader,
+  formatDate,
+  formatFileSize,
+  inputClass,
+} from "@/components/ui";
+
+type PortalFile = {
+  _id: string;
+  originalName: string;
+  fileSize: number;
+  fileType: string;
+  createdAt: string;
+  downloadUrl: string;
+  project?: { name: string };
+  freelancer?: { _id: string; name: string };
+};
+
+const extensionOf = (name: string) => {
+  const parts = name.split(".");
+  return parts.length > 1 ? parts.pop()!.toUpperCase().slice(0, 5) : "FILE";
+};
 
 export default function ClientFilesPage() {
-  const [files, setFiles] = useState(initialFiles);
-  const [search, setSearch] = useState("");
-
-  const filteredFiles = files.filter(
-    (file) =>
-      file.name.toLowerCase().includes(search.toLowerCase()) ||
-      file.freelancer.toLowerCase().includes(search.toLowerCase()) ||
-      file.project.toLowerCase().includes(search.toLowerCase())
+  const { items: files, loading, error, reload } = useApiList<PortalFile>(
+    "/api/files",
+    "files"
   );
 
-  const deleteFile = (id: number) => {
-    setFiles((currentFiles) =>
-      currentFiles.filter((file) => file.id !== id)
-    );
-  };
+  const [search, setSearch] = useState("");
+  const [freelancer, setFreelancer] = useState("All");
+
+  const freelancers = [
+    ...new Map(
+      files
+        .filter((file) => file.freelancer)
+        .map((file) => [file.freelancer!._id, file.freelancer!.name])
+    ),
+  ];
+
+  const visible = files.filter(
+    (file) =>
+      (freelancer === "All" || file.freelancer?._id === freelancer) &&
+      `${file.originalName} ${file.project?.name} ${file.freelancer?.name}`
+        .toLowerCase()
+        .includes(search.toLowerCase())
+  );
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      {/* Navbar */}
-      <header className="border-b border-slate-800 bg-slate-900">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/" className="text-2xl font-bold">
-            Freelancer<span className="text-blue-500">Portal</span>
-          </Link>
+    <div className="p-4 md:p-8">
+      <PageHeader
+        title="My Files"
+        subtitle="Files shared with you by your freelancers."
+      />
 
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-slate-400">
-              ABC Company
-            </span>
+      <ErrorBanner message={error} onRetry={reload} />
 
-            <button className="px-4 py-2 rounded-lg border border-slate-700 hover:bg-slate-800">
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Back */}
-        <Link
-          href="/client/dashboard"
-          className="text-blue-400 hover:text-blue-300 text-sm"
+      <div className="mb-6 flex flex-col gap-4 md:flex-row">
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search file, project or freelancer..."
+          className={`${inputClass} flex-1`}
+        />
+        <select
+          value={freelancer}
+          onChange={(event) => setFreelancer(event.target.value)}
+          className={`${inputClass} md:w-56`}
         >
-          ← Back to Dashboard
-        </Link>
+          <option value="All">All Freelancers</option>
+          {freelancers.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
 
-        {/* Heading */}
-        <div className="mt-6 mb-8">
-          <h1 className="text-3xl font-bold">Shared Files</h1>
-
-          <p className="text-slate-400 mt-2">
-            Access files shared with you by your freelancers.
-          </p>
-        </div>
-
-        {/* Search */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-8">
-          <input
-            type="text"
-            placeholder="Search files, freelancers or projects..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-700 focus:outline-none focus:border-blue-500"
+      {loading ? (
+        <LoadingState label="Loading files..." />
+      ) : visible.length === 0 ? (
+        <div className="rounded-2xl border border-white/10 bg-[#111827]">
+          <EmptyState
+            message={
+              files.length === 0
+                ? "No files have been shared with you yet."
+                : "No files match your search."
+            }
           />
         </div>
-
-        {/* File Grid */}
-        {filteredFiles.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {filteredFiles.map((file) => (
-              <div
-                key={file.id}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-6"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold">
-                      {file.type === "PDF"
-                        ? "PDF"
-                        : file.type === "Design"
-                        ? "FIG"
-                        : "ZIP"}
-                    </div>
-
-                    <div>
-                      <h2 className="font-semibold">
-                        {file.name}
-                      </h2>
-
-                      <p className="text-sm text-slate-500 mt-1">
-                        {file.size} • {file.type}
-                      </p>
-                    </div>
-                  </div>
-
-                  <span className="text-xs text-slate-500">
-                    {file.date}
-                  </span>
+      ) : (
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+          {visible.map((file) => (
+            <div
+              key={file._id}
+              className="rounded-2xl border border-white/10 bg-[#111827] p-5"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-xs font-bold text-blue-400">
+                  {extensionOf(file.originalName)}
                 </div>
-
-                <div className="border-t border-slate-800 mt-6 pt-5">
-                  <p className="text-sm text-slate-400">
-                    Freelancer
+                <div className="min-w-0">
+                  <p className="truncate font-medium" title={file.originalName}>
+                    {file.originalName}
                   </p>
-
-                  <p className="font-medium mt-1">
-                    {file.freelancer}
+                  <p className="mt-1 text-xs text-gray-500">
+                    {formatFileSize(file.fileSize)} · {formatDate(file.createdAt)}
                   </p>
-
-                  <p className="text-sm text-slate-400 mt-4">
-                    Project
-                  </p>
-
-                  <p className="font-medium mt-1">
-                    {file.project}
-                  </p>
-                </div>
-
-                <div className="flex gap-3 mt-6">
-                  <button
-                    className="flex-1 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 font-medium"
-                  >
-                    Download
-                  </button>
-
-                  <button
-                    onClick={() => deleteFile(file.id)}
-                    className="px-4 py-2.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300"
-                  >
-                    Remove
-                  </button>
                 </div>
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
-            <h2 className="text-xl font-semibold">
-              No files found
-            </h2>
 
-            <p className="text-slate-400 mt-2">
-              Try changing your search.
-            </p>
-          </div>
-        )}
+              <div className="mt-4 space-y-2 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-gray-500">Freelancer</span>
+                  <span className="truncate text-gray-300">
+                    {file.freelancer?.name || "-"}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-gray-500">Project</span>
+                  <span className="truncate text-gray-300">
+                    {file.project?.name || "-"}
+                  </span>
+                </div>
+              </div>
 
-        {/* Information */}
-        <div className="mt-8 bg-blue-500/10 border border-blue-500/20 rounded-xl p-5">
-          <p className="text-blue-300 text-sm">
-            <span className="font-semibold">File Sharing:</span>{" "}
-            These are currently sample file records. Actual file
-            uploads and downloads will be connected to cloud or
-            server storage later.
-          </p>
+              <a
+                href={file.downloadUrl}
+                className="mt-5 block rounded-lg bg-white/5 px-4 py-2.5 text-center text-sm font-medium text-blue-400 transition hover:bg-white/10"
+              >
+                Download
+              </a>
+            </div>
+          ))}
         </div>
-      </div>
-    </main>
+      )}
+    </div>
   );
 }
